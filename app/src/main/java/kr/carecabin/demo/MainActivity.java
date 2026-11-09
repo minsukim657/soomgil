@@ -46,6 +46,7 @@ public final class MainActivity extends Activity {
     private Scenario trip;
     private boolean started;
     private boolean recirculating;
+    private Mode vehicleMode = Mode.AUTOMATIC;
     private boolean driverIntervened;
     private boolean defrost;
     private boolean timedOut;
@@ -101,10 +102,12 @@ public final class MainActivity extends Activity {
         dashboard.addView(controls);
         manual = addButton(controls, "운전자 공조 조작", view -> {
             driverIntervened = true;
+            vehicleMode = Mode.AUTOMATIC; // Simulated driver action, not a policy command.
             update();
         });
         demist = addButton(controls, "앞유리 김 서림 제거", view -> {
             defrost = true;
+            vehicleMode = Mode.FRESH_AIR; // Simulated defrost priority.
             update();
         });
 
@@ -125,6 +128,7 @@ public final class MainActivity extends Activity {
         elapsed = 0;
         started = true;
         recirculating = false;
+        vehicleMode = Mode.AUTOMATIC;
         driverIntervened = false;
         defrost = false;
         timedOut = false;
@@ -144,23 +148,26 @@ public final class MainActivity extends Activity {
 
     private void update() {
         Air air = stage == 3 ? trip.afterAir() : trip.approachAir();
-        Action action = policy.update(new Observation(Road.values()[stage], trip.work(), air, elapsed,
-                enabled.isChecked(), driverIntervened, defrost));
-        switch (action) {
-            case START_RECIRCULATION -> {
-                recirculating = true;
-                record("전방 공사 진행 · 인근 초미세먼지 나쁨 · 진입 전 내기순환 시작");
+        Decision decision = policy.update(new Observation(Road.values()[stage], trip.work(), air, elapsed,
+                enabled.isChecked(), driverIntervened, defrost), vehicleMode);
+        switch (decision.action()) {
+            case SWITCH, RESTORE -> {
+                // Demo-only successful application. Real integration must wait for the vehicle callback.
+                if (policy.isPending(decision.requestId())) {
+                    vehicleMode = decision.target();
+                    policy.onApplied(decision.requestId(), true);
+                    timedOut = decision.reason() == Reason.OVERRIDE_TIMEOUT;
+                    record(decision.action() == Action.SWITCH
+                            ? "전방 공사 진행 · 인근 초미세먼지 나쁨 · 진입 전 내기순환 시작"
+                            : decision.reason() == Reason.AUTOMATIC_DISABLED
+                            ? "자동 전환 해제 · 이전 설정 복원"
+                            : timedOut ? "시연용 작동 시간 경과 · 이전 설정 복원"
+                            : "구간 통과 · 이전 공조 설정 복원");
+                }
             }
-            case RESTORE_PREVIOUS -> {
-                recirculating = false;
-                record(enabled.isChecked() ? "구간 통과 · 이전 공조 설정 복원" : "자동 전환 해제 · 이전 설정 복원");
-            }
-            case RELEASE_TO_VEHICLE -> {
-                recirculating = false;
-                record("자동 제어 종료 · " + priorityReason());
-            }
-            case NONE -> { }
+            case KEEP -> { }
         }
+        recirculating = vehicleMode == Mode.RECIRCULATION;
 
         mode.setText(recirculating ? "내기순환 작동" : "차량 기본 공조");
         if (defrost || driverIntervened || timedOut) {
@@ -168,11 +175,11 @@ public final class MainActivity extends Activity {
         } else if (!enabled.isChecked()) {
             status.setText("자동 전환이 꺼져 있어요.");
         } else if (trip.work() == Work.ENDED) {
-            status.setText("공사 종료 정보가 확인됐어요. 차량 기본 공조를 유지해요.");
+            status.setText(recirculating ? "공사 종료 정보가 확인됐어요. 구간 통과 후 이전 설정으로 복원해요."
+                    : "공사 종료 정보가 확인됐어요. 차량 기본 공조를 유지해요.");
         } else if (trip.work() == Work.UNKNOWN || air == Air.UNKNOWN) {
-            status.setText("환경 정보를 확인할 수 없어 차량 기본 공조를 유지해요.");
-        } else if (stage == 3 && recirculating) {
-            status.setText("주변 측정소 대기 정보가 ‘나쁨’이에요. 외기 재개를 잠시 보류해요.");
+            status.setText(recirculating ? "환경 정보를 확인할 수 없어 새로운 전환 없이 현재 공조를 유지해요."
+                    : "환경 정보를 확인할 수 없어 차량 기본 공조를 유지해요.");
         } else if (stage == 3) {
             status.setText("공사 구간을 지났어요. 차량 기본 공조로 운행해요.");
         } else if (recirculating) {
