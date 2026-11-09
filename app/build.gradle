@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.application' version '9.3.3'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+android {
+    namespace 'kr.carecabin.demo'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'kr.carecabin.demo'
+        minSdk 28
+        targetSdk 34
+        versionCode 2
+        versionName '0.2'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
