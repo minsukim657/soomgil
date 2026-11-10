@@ -29,6 +29,9 @@ public final class MainActivity extends Activity {
     private static final int AMBER = Color.rgb(255, 206, 133);
     private static final String[] STAGES = {"출발", "공사 구간 진입 전", "공사 구간 통과 중", "구간 통과 후"};
     private static final long[] STEP_TIMES = {0, 10, 20, 30};
+    private static final double DEMO_LATITUDE = 34.69806;
+    private static final double DEMO_LONGITUDE = 126.69637;
+    private static final String[] API_SAMPLES = {"공사 진행", "공사 종료", "조회 실패"};
 
     private record Scenario(String title, Work work, Air approachAir, Air afterAir) {
         @Override public String toString() { return title; }
@@ -45,6 +48,7 @@ public final class MainActivity extends Activity {
 
     private VentilationPolicy policy;
     private final ArrayDeque<String> history = new ArrayDeque<>();
+    private final SoomgilApiClient apiClient = new SoomgilApiClient();
     private int stage;
     private long elapsed;
     private Scenario trip;
@@ -66,6 +70,9 @@ public final class MainActivity extends Activity {
     private Button next;
     private Button manual;
     private Button demist;
+    private Button fetchEnvironment;
+    private Spinner apiSample;
+    private TextView environmentResult;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -89,6 +96,7 @@ public final class MainActivity extends Activity {
         demo.setBackground(surface(SURFACE, 20));
         demo.setPadding(dp(14), dp(7), dp(14), dp(7));
         addText(root, "주행 경로에 맞춘 공조", 16, MUTED, false);
+        buildEnvironmentPanel(root);
 
         LinearLayout columns = new LinearLayout(this);
         columns.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
@@ -159,6 +167,47 @@ public final class MainActivity extends Activity {
             if (started) update();
         });
         updateButtons();
+    }
+
+    private void buildEnvironmentPanel(LinearLayout root) {
+        LinearLayout card = panel(root);
+        addText(card, "공사·주변 대기 관측", 20, Color.WHITE, true);
+        addText(card, "시연 좌표 · 34.69806, 126.69637", 14, MUTED, false);
+        fetchEnvironment = addButton(card, "실제 API에서 조회", view -> fetchEnvironment());
+        apiSample = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, API_SAMPLES);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        apiSample.setAdapter(adapter);
+        apiSample.setContentDescription("공사 상태 샘플 선택");
+        card.addView(apiSample, new LinearLayout.LayoutParams(-1, dp(50)));
+        addButton(card, "샘플 적용", view -> showSample(apiSample.getSelectedItemPosition()));
+        environmentResult = addText(card, "실제 API 조회 또는 샘플을 선택해 주세요.", 15, MUTED, false);
+    }
+
+    private void fetchEnvironment() {
+        fetchEnvironment.setEnabled(false);
+        environmentResult.setText("ITS와 에어코리아를 조회하고 있어요…");
+        apiClient.fetchAround(DEMO_LATITUDE, DEMO_LONGITUDE, new SoomgilApiClient.Callback() {
+            @Override public void onSuccess(EnvironmentReading reading) {
+                fetchEnvironment.setEnabled(true);
+                environmentResult.setText(reading.toDisplayText());
+            }
+
+            @Override public void onFailure(String message) {
+                fetchEnvironment.setEnabled(true);
+                environmentResult.setText(EnvironmentReading.failure(message).toDisplayText());
+            }
+        });
+    }
+
+    private void showSample(int selected) {
+        EnvironmentReading reading = switch (selected) {
+            case 0 -> EnvironmentSamples.inProgress();
+            case 1 -> EnvironmentSamples.ended();
+            default -> EnvironmentSamples.queryFailed();
+        };
+        environmentResult.setText(reading.toDisplayText());
     }
 
     private void startTrip() {
@@ -272,6 +321,12 @@ public final class MainActivity extends Activity {
         demist.setEnabled(started && !defrost);
     }
 
+    @Override
+    protected void onDestroy() {
+        apiClient.shutdown();
+        super.onDestroy();
+    }
+
     private LinearLayout panel(LinearLayout parent) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -332,3 +387,4 @@ public final class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }
+
