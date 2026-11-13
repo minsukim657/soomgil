@@ -8,14 +8,14 @@ final class EnvironmentSamples {
         return new EnvironmentReading(EnvironmentReading.WorkStatus.IN_PROGRESS,
                 "국도2호선", "강진읍 인근 공사 지점", "종점방향",
                 "2026-09-02 00:00", "2026-12-31 00:00",
-                "강진읍", "1", "좋음", "2026-11-09 17:00", 9.1, null);
+                "강진읍", "3", "나쁨", "2026-11-09 17:00", 9.1, null);
     }
 
     static EnvironmentReading ended() {
         return new EnvironmentReading(EnvironmentReading.WorkStatus.ENDED,
                 "국도2호선", "강진읍 인근 공사 지점", "종점방향",
                 "2026-09-02 00:00", "2026-11-08 00:00",
-                "강진읍", "1", "좋음", "2026-11-09 17:00", 9.1, null);
+                "강진읍", "3", "나쁨", "2026-11-09 17:00", 9.1, null);
     }
 
     static EnvironmentReading queryFailed() {

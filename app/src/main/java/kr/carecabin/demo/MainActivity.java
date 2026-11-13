@@ -6,6 +6,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
@@ -28,6 +30,7 @@ public final class MainActivity extends Activity {
     private static final int MUTED = Color.rgb(181, 202, 212);
     private static final int AMBER = Color.rgb(255, 206, 133);
     private static final String[] STAGES = {"출발", "공사 구간 진입 전", "공사 구간 통과 중", "구간 통과 후"};
+    private static final long DEMO_STEP_DELAY_MS = 3000;
     private static final long[] STEP_TIMES = {0, 10, 20, 30};
     private static final double DEMO_LATITUDE = 34.69806;
     private static final double DEMO_LONGITUDE = 126.69637;
@@ -67,7 +70,8 @@ public final class MainActivity extends Activity {
     private TextView workValue;
     private TextView airValue;
     private TextView log;
-    private Button next;
+    private final Handler demoHandler = new Handler(Looper.getMainLooper());
+    private final Runnable advanceDemo = this::advance;
     private Button manual;
     private Button demist;
     private Button fetchEnvironment;
@@ -129,7 +133,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout settings = panel(side);
         addText(settings, "시연 조작", 20, Color.WHITE, true);
-        addText(settings, "가상 공사·대기·차량 상태를 바꿔봐요.", 14, MUTED, false);
+        addText(settings, "주행을 시작하면 공사 구간에 자동으로 접근하고 통과해요.", 14, MUTED, false);
         scenario = new Spinner(this);
         ArrayAdapter<Scenario> options = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, SCENARIOS);
         options.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -141,11 +145,10 @@ public final class MainActivity extends Activity {
         enabled.setChecked(true);
         enabled.setMinHeight(dp(48));
         settings.addView(enabled, new LinearLayout.LayoutParams(-1, -2));
-        Button start = addButton(settings, "이 조건으로 주행 시작", view -> startTrip());
+        Button start = addButton(settings, "이 조건으로 주행 시작", view -> startTrip(SCENARIOS[scenario.getSelectedItemPosition()]));
         start.setBackgroundTintList(ColorStateList.valueOf(MINT));
         start.setTextColor(BACKGROUND);
 
-        next = addButton(settings, "다음 구간", view -> advance());
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         settings.addView(controls);
@@ -181,7 +184,7 @@ public final class MainActivity extends Activity {
         apiSample.setAdapter(adapter);
         apiSample.setContentDescription("공사 상태 샘플 선택");
         card.addView(apiSample, new LinearLayout.LayoutParams(-1, dp(50)));
-        addButton(card, "샘플 적용", view -> showSample(apiSample.getSelectedItemPosition()));
+        addButton(card, "샘플로 주행 시작", view -> startSampleTrip(apiSample.getSelectedItemPosition()));
         environmentResult = addText(card, "실제 API 조회 또는 샘플을 선택해 주세요.", 15, MUTED, false);
     }
 
@@ -201,17 +204,29 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void showSample(int selected) {
+    private void startSampleTrip(int selected) {
         EnvironmentReading reading = switch (selected) {
             case 0 -> EnvironmentSamples.inProgress();
             case 1 -> EnvironmentSamples.ended();
             default -> EnvironmentSamples.queryFailed();
         };
-        environmentResult.setText(reading.toDisplayText());
+        environmentResult.setText("시연 샘플\n" + reading.toDisplayText());
+        Work work = switch (reading.workStatus) {
+            case IN_PROGRESS -> Work.ACTIVE;
+            case ENDED -> Work.ENDED;
+            case UNKNOWN -> Work.UNKNOWN;
+        };
+        Air air = switch (reading.pm25Grade) {
+            case "1", "2" -> Air.NORMAL;
+            case "3", "4" -> Air.POOR;
+            default -> Air.UNKNOWN;
+        };
+        startTrip(new Scenario(reading.workStatusLabel(), work, air, air));
     }
 
-    private void startTrip() {
-        trip = SCENARIOS[scenario.getSelectedItemPosition()];
+    private void startTrip(Scenario selected) {
+        demoHandler.removeCallbacks(advanceDemo);
+        trip = selected;
         policy = new VentilationPolicy();
         history.clear();
         stage = 0;
@@ -223,17 +238,16 @@ public final class MainActivity extends Activity {
         defrost = false;
         timedOut = false;
         update();
+        demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
     }
 
     private void advance() {
-        if (stage < STEP_TIMES.length - 1) {
-            stage++;
-            elapsed = STEP_TIMES[stage];
-        } else {
-            elapsed = 60;
-            timedOut = true;
-        }
+        stage++;
+        elapsed = STEP_TIMES[stage];
         update();
+        if (stage < STEP_TIMES.length - 1) {
+            demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+        }
     }
 
     private void update() {
@@ -315,14 +329,13 @@ public final class MainActivity extends Activity {
     }
 
     private void updateButtons() {
-        next.setEnabled(started && (stage < 3 || recirculating));
-        next.setText(stage == 3 && recirculating ? "시간 경과 시연" : "다음 구간");
         manual.setEnabled(started && !driverIntervened && !defrost);
         demist.setEnabled(started && !defrost);
     }
 
     @Override
     protected void onDestroy() {
+        demoHandler.removeCallbacks(advanceDemo);
         apiClient.shutdown();
         super.onDestroy();
     }
