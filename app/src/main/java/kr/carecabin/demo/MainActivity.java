@@ -1,6 +1,7 @@
 package kr.carecabin.demo;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -8,6 +9,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
@@ -49,6 +51,7 @@ public final class MainActivity extends Activity {
             new Scenario("공사 진행 · 통과 후에도 대기 나쁨", Work.ACTIVE, Air.POOR, Air.POOR)
     };
 
+    private PleosVehicleManager pleosVehicleManager;
     private VentilationPolicy policy;
     private final ArrayDeque<String> history = new ArrayDeque<>();
     private final SoomgilApiClient apiClient = new SoomgilApiClient();
@@ -60,7 +63,6 @@ public final class MainActivity extends Activity {
     private Mode vehicleMode = Mode.AUTOMATIC;
     private boolean driverIntervened;
     private boolean defrost;
-    private boolean timedOut;
 
     private Spinner scenario;
     private Switch enabled;
@@ -72,6 +74,11 @@ public final class MainActivity extends Activity {
     private TextView log;
     private final Handler demoHandler = new Handler(Looper.getMainLooper());
     private final Runnable advanceDemo = this::advance;
+    private static final long VEHICLE_STATE_POLL_MS = 1500;
+    private boolean statePollInFlight;
+    private boolean appControlInFlight;
+    private boolean activityResumed;
+    private final Runnable pollVehicleState = this::pollActualVehicleState;
     private Button manual;
     private Button demist;
     private Button fetchEnvironment;
@@ -81,6 +88,10 @@ public final class MainActivity extends Activity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Initializes the Pleos Vehicle SDK entry point. This does not by itself
+        // prove Vehicle Service connectivity or HVAC availability.
+        pleosVehicleManager = new PleosVehicleManager(this);
+        pleosVehicleManager.initialize();
         boolean wide = getResources().getConfiguration().screenWidthDp >= 760;
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -117,7 +128,7 @@ public final class MainActivity extends Activity {
         columns.addView(side, sideLayout);
 
         LinearLayout dashboard = panel(overview);
-        addText(dashboard, "현재 가상 공조", 15, MUTED, true);
+        addText(dashboard, "현재 차량 공조 상태", 15, MUTED, true);
         mode = addText(dashboard, "차량 기본 공조", 34, Color.WHITE, true);
         mode.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         addText(dashboard, "동작 이유", 14, MUTED, true);
@@ -163,6 +174,11 @@ public final class MainActivity extends Activity {
             update();
         });
 
+        Button hvacOnTest = addButton(settings, "실차 내기순환 ON 테스트", view ->
+                confirmHvacTest(true));
+        Button hvacOffTest = addButton(settings, "실차 내기순환 OFF 테스트", view ->
+                confirmHvacTest(false));
+
         LinearLayout changes = panel(side);
         addText(changes, "가상 주행 기록", 19, Color.WHITE, true);
         log = addText(changes, "아직 변경이 없어요.", 15, MUTED, false);
@@ -170,6 +186,71 @@ public final class MainActivity extends Activity {
             if (started) update();
         });
         updateButtons();
+        mode.setText("차량 공조 상태 확인 중");
+    }
+
+    /** Keep the dashboard synchronized with the vehicle, including driver-operated HVAC changes. */
+    private void pollActualVehicleState() {
+        if (isFinishing() || isDestroyed() || pleosVehicleManager == null) return;
+        if (appControlInFlight || statePollInFlight) {
+            if (activityResumed) demoHandler.postDelayed(pollVehicleState, VEHICLE_STATE_POLL_MS);
+            return;
+        }
+        statePollInFlight = true;
+        pleosVehicleManager.getRecirculationState((success, actual, detail) -> runOnUiThread(() -> {
+            statePollInFlight = false;
+            if (isFinishing() || isDestroyed()) return;
+            // A poll that began before an app command must not overwrite the command's newer result.
+            if (appControlInFlight) {
+                if (activityResumed) demoHandler.postDelayed(pollVehicleState, VEHICLE_STATE_POLL_MS);
+                return;
+            }
+            if (success && actual != null) {
+                Mode liveMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
+                boolean changed = vehicleMode != liveMode;
+                vehicleMode = liveMode;
+                recirculating = actual;
+                if (changed) {
+                    if (started && !appControlInFlight) driverIntervened = true;
+                    record("차량 공조 상태 변경 감지 · " + (actual ? "내기순환 중" : "기본 공조 중"));
+                    if (started && policy != null) {
+                        // Feed the live state into the policy so manual driver changes take priority.
+                        update();
+                    } else {
+                        renderLiveVehicleMode();
+                    }
+                    if (!started) log.setText(String.join("\n", history));
+                } else if (!started) {
+                    renderLiveVehicleMode();
+                }
+            } else {
+                Log.w("SoomgilPleos", "Live HVAC state polling failed: " + detail);
+            }
+            if (activityResumed) {
+                demoHandler.removeCallbacks(pollVehicleState);
+                demoHandler.postDelayed(pollVehicleState, VEHICLE_STATE_POLL_MS);
+            }
+        }));
+    }
+
+    private void renderLiveVehicleMode() {
+        mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
+        mode.setTextColor(recirculating ? MINT : Color.WHITE);
+        status.setText("실제 차량 공조 상태를 표시하고 있어요.");
+    }
+
+    private void confirmHvacTest(boolean enabled) {
+        String action = enabled ? "내기 순환을 켜기" : "내기 순환을 끄기";
+        new AlertDialog.Builder(this)
+                .setTitle("실제 차량 공조 테스트")
+                .setMessage("연결된 테스트 차량의 내기 순환을 " + action
+                        + " 요청합니다. 차량이 안전하게 정차해 있고 테스트해도 되는지 확인하세요.")
+                .setNegativeButton("취소", (dialog, which) -> dialog.dismiss())
+                .setPositiveButton("요청", (dialog, which) -> {
+                    if (pleosVehicleManager != null)
+                        pleosVehicleManager.setRecirculationForTest(enabled);
+                })
+                .show();
     }
 
     private void buildEnvironmentPanel(LinearLayout root) {
@@ -226,19 +307,39 @@ public final class MainActivity extends Activity {
 
     private void startTrip(Scenario selected) {
         demoHandler.removeCallbacks(advanceDemo);
-        trip = selected;
-        policy = new VentilationPolicy();
+        started = false;
         history.clear();
-        stage = 0;
-        elapsed = 0;
-        started = true;
-        recirculating = false;
-        vehicleMode = Mode.AUTOMATIC;
-        driverIntervened = false;
-        defrost = false;
-        timedOut = false;
-        update();
-        demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+        record("주행 전 실제 차량 공조 상태를 확인하고 있어요.");
+        log.setText(String.join("\n", history));
+        if (pleosVehicleManager == null) {
+            record("Pleos 연결이 없어 기존 공조 상태를 확인할 수 있어 주행을 시작하지 않았어요.");
+            log.setText(String.join("\n", history));
+            return;
+        }
+        pleosVehicleManager.getRecirculationState((success, actual, detail) -> runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            if (!success || actual == null) {
+                record("기존 공조 상태 확인 실패 · 안전을 위해 자동 주행 제어를 시작하지 않았어요. " + detail);
+                log.setText(String.join("\n", history));
+                status.setText("차량 공조 상태를 확인할 수 없어 주행 제어를 보류해요.");
+                return;
+            }
+            trip = selected;
+            policy = new VentilationPolicy();
+            history.clear();
+            stage = 0;
+            elapsed = 0;
+            started = true;
+            recirculating = actual;
+            vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
+            driverIntervened = false;
+            defrost = false;
+            record(actual
+                    ? "출발 전 차량 내기순환 ON 확인 · 앱은 이 상태를 기본값으로 존중"
+                    : "출발 전 차량 내기순환 OFF 확인 · 앱이 전환한 경우 위험 해소 후 OFF 복원");
+            update();
+            demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+        }));
     }
 
     private void advance() {
@@ -256,17 +357,35 @@ public final class MainActivity extends Activity {
                 enabled.isChecked(), driverIntervened, defrost), vehicleMode);
         switch (decision.action()) {
             case SWITCH, RESTORE -> {
-                // Demo-only successful application. Real integration must wait for the vehicle callback.
                 if (policy.isPending(decision.requestId())) {
-                    vehicleMode = decision.target();
-                    policy.onApplied(decision.requestId(), true);
-                    timedOut = decision.reason() == Reason.OVERRIDE_TIMEOUT;
-                    record(decision.action() == Action.SWITCH
-                            ? "전방 공사 진행 · 인근 초미세먼지 나쁨 · 진입 전 내기순환 시작"
-                            : decision.reason() == Reason.AUTOMATIC_DISABLED
-                            ? "자동 전환 해제 · 이전 설정 복원"
-                            : timedOut ? "시연용 작동 시간 경과 · 이전 설정 복원"
-                            : "구간 통과 · 이전 공조 설정 복원");
+                    final long requestId = decision.requestId();
+                    final Action requestedAction = decision.action();
+                    final Mode target = decision.target();
+                    boolean requestedRecirculation = target == Mode.RECIRCULATION;
+                    if (pleosVehicleManager == null) {
+                        policy.onApplied(requestId, false);
+                        record("Pleos 연결 없음 · 공조 변경을 적용하지 못했어요.");
+                    } else {
+                        appControlInFlight = true;
+                        pleosVehicleManager.setRecirculation(requestedRecirculation,
+                                (requested, verified, actual, detail) -> runOnUiThread(() -> {
+                                    appControlInFlight = false;
+                                    if (policy == null || !policy.isPending(requestId)) return;
+                                    policy.onApplied(requestId, verified);
+                                    if (verified) {
+                                        vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
+                                        recirculating = actual;
+                                        record(requestedAction == Action.SWITCH
+                                                ? "대기질 나쁨 감지 · 실제 차량 내기순환 ON 확인"
+                                                : "공사 구간 통과/자동화 종료 · 실제 차량 공조 상태 복원 확인");
+                                    } else {
+                                        record("공조 변경 확인 실패 · " + detail);
+                                    }
+                                    renderDashboard(trip.work(), air);
+                                    log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
+                                    updateButtons();
+                                }));
+                    }
                 }
             }
             case KEEP -> { }
@@ -279,23 +398,29 @@ public final class MainActivity extends Activity {
     }
 
     private void renderDashboard(Work work, Air air) {
-        mode.setText(recirculating ? "내기순환 중" : "차량 기본 공조");
+        mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
         mode.setTextColor(recirculating ? MINT : Color.WHITE);
-        if (defrost || driverIntervened || timedOut) {
+        if (defrost || driverIntervened) {
             status.setText(priorityReason());
         } else if (!enabled.isChecked()) {
             status.setText("자동 전환이 꺼져 있어요.");
+        } else if (stage == 3 && air == Air.POOR) {
+            status.setText(recirculating
+                    ? "공사 구간은 지났지만 대기가 여전히 나빠 내기순환을 유지해요."
+                    : "공사 구간은 지났지만 대기가 여전히 나빠요. 내기순환 전환 상태를 확인해 주세요.");
         } else if (work == Work.ENDED) {
-            status.setText(recirculating ? "공사 종료 정보가 확인됐어요. 구간 통과 후 이전 설정으로 복원해요."
+            status.setText(recirculating ? "공사 종료 정보가 확인됐어요. 대기질 위험 해소 여부를 확인해요."
                     : "공사 종료 정보가 확인됐어요. 차량 기본 공조를 유지해요.");
         } else if (work == Work.UNKNOWN || air == Air.UNKNOWN) {
             status.setText(recirculating ? "환경 정보를 확인할 수 없어 새로운 전환 없이 현재 공조를 유지해요."
                     : "환경 정보를 확인할 수 없어 차량 기본 공조를 유지해요.");
         } else if (stage == 3) {
-            status.setText("공사 구간을 지났어요. 차량 기본 공조로 운행해요.");
+            status.setText(recirculating
+                    ? "공사 구간과 대기질 위험이 해소될 때까지 내기순환을 유지해요."
+                    : "공사 구간을 지났고 대기질도 보통이라 기본 공조로 복원했어요.");
         } else if (recirculating) {
-            status.setText(stage == 1 ? "전방 공사와 인근 초미세먼지 정보를 확인해 내기로 전환했어요."
-                    : "공사 구간을 지나는 동안 내기순환 중이에요.");
+            status.setText(stage == 1 ? "차량 내기순환 상태를 확인했어요. 실제 차량 상태를 유지해요."
+                    : "실제 차량 내기순환 상태를 유지하고 있어요.");
         } else if (air == Air.NORMAL) {
             status.setText("인근 초미세먼지가 ‘보통’이라 차량 기본 공조를 유지해요.");
         } else {
@@ -320,8 +445,7 @@ public final class MainActivity extends Activity {
 
     private String priorityReason() {
         if (defrost) return "앞유리 김 서림 제거를 우선해요.";
-        if (driverIntervened) return "운전자의 공조 조작을 우선해요.";
-        return "시연용 작동 시간이 지나 자동 제어를 종료했어요.";
+        return "운전자의 공조 조작을 우선해요.";
     }
 
     private void record(String message) {
@@ -334,9 +458,25 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+        demoHandler.removeCallbacks(pollVehicleState);
+        demoHandler.post(pollVehicleState);
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        demoHandler.removeCallbacks(pollVehicleState);
+        super.onPause();
+    }
+
+    @Override
     protected void onDestroy() {
         demoHandler.removeCallbacks(advanceDemo);
         apiClient.shutdown();
+        if (pleosVehicleManager != null) pleosVehicleManager.release();
         super.onDestroy();
     }
 
