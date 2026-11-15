@@ -16,11 +16,25 @@ final class EnvironmentReading {
     final String observedAt;
     final double stationDistanceKm;
     final String failureMessage;
+    final double workLatitude;
+    final double workLongitude;
 
     EnvironmentReading(WorkStatus workStatus, String roadName, String segment,
                        String direction, String validFrom, String validUntil,
                        String stationName, String pm25Grade, String pm25GradeLabel,
                        String observedAt, double stationDistanceKm, String failureMessage) {
+        this(workStatus, roadName, segment, direction, validFrom, validUntil, stationName,
+                pm25Grade, pm25GradeLabel, observedAt, stationDistanceKm, failureMessage,
+                Double.NaN, Double.NaN);
+    }
+
+    EnvironmentReading(WorkStatus workStatus, String roadName, String segment,
+                       String direction, String validFrom, String validUntil,
+                       String stationName, String pm25Grade, String pm25GradeLabel,
+                       String observedAt, double stationDistanceKm, String failureMessage,
+                       double workLatitude, double workLongitude) {
+        this.workLatitude = workLatitude;
+        this.workLongitude = workLongitude;
         this.workStatus = workStatus;
         this.roadName = roadName;
         this.segment = segment;
@@ -58,7 +72,10 @@ final class EnvironmentReading {
         String distance = stationDistanceKm >= 0
                 ? String.format(java.util.Locale.KOREA, " · 직선거리 %.1fkm", stationDistanceKm)
                 : "";
-        return workStatusLabel() + "\n"
+        String workPoint = Double.isFinite(workLatitude) && Double.isFinite(workLongitude)
+                ? String.format(java.util.Locale.ROOT, "ITS 공사 지점 %.6f, %.6f\n", workLatitude, workLongitude)
+                : "";
+        return workStatusLabel() + "\n" + workPoint
                 + "도로·구간: " + roadName + " · " + segment + "\n"
                 + "방향: " + direction + "\n"
                 + "유효 시각: " + validFrom + " ~ " + validUntil + "\n"

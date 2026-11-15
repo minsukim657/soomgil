@@ -16,11 +16,20 @@
 - 실제 공사·대기 조회는 `진행/종료/확인 불가`와 `보통/나쁨/확인 불가`로 정규화합니다. 조회 실패, 오래된 관측, 구간 일치 여부가 불확실한 경우는 `확인 불가`입니다. 대상 방향과 도로가 일치할 때만 `APPROACH`를 전달합니다.
 - Pleos의 실제 내기순환 Boolean을 화면에 표시합니다. 운전자 직접 조작이 감지되면 해당 주행에서 자동 제어권을 포기하며 운전자 설정을 되돌리지 않습니다. SDK에서 전체 HVAC 프로필을 읽는 것은 아니므로 `기본 공조`는 내기순환 OFF 상태를 뜻합니다.
 
+## 서부간선도로 GPS 시연
+
+1. Android Studio에서 Pleos Connect 에뮬레이터를 선택해 `app`을 실행합니다. Virtual Console을 열어 둔 상태에서 **Climate**의 내기순환을 끄고, 숨길에서 **기본 공조 중**이 표시되는지 확인합니다.
+2. 에뮬레이터의 **Extended controls → Location**에서 [시연 GPX](demo/soomgil-seobu-demo.gpx)를 불러옵니다. 경로 첫 좌표가 `37.5152643, 126.881747`인지 확인합니다.
+3. 숨길에서 **공사 진행 · 접근 시 대기 나쁨**을 선택한 뒤 **서부간선도로 GPS 시연 시작**을 누릅니다. 위치 권한을 요청하면 허용하고 GPX 경로를 재생합니다.
+4. 같은 방향으로 진입하기 전 **내기순환 ON**, 공사 구간 통과 후 대기질이 보통으로 바뀌면 **OFF 복원**을 Virtual Console에서 확인합니다.
+
+이 경로는 [서울경찰청 교통통제 공지](https://www.spatic.go.kr/spatic/assem/getInfoView.do?mgrSeq=2317)를 참고해 구성했습니다. 차도 좌표는 [OpenStreetMap 기여자](https://www.openstreetmap.org/copyright)가 제공했습니다. 공사 경계와 대기 등급은 시연용입니다. 실제 API 조회는 결과를 표시하며, 공사와 차량 경로의 일치가 확인되기 전에는 공조 제어를 보류합니다.
+
 ## 실제 Pleos 연동 순서
 
 1. Android Studio의 **Tools → SDK Manager → SDK Update Sites**에서 [Pleos 전용 시스템 이미지](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/setup-connect-sdk-emulator)를 추가합니다. Windows용 주소는 `https://nexus-playground.pleos.ai/repository/raw-releases/connect-avd/2.x/crp-sys-img.xml`입니다. **API 34 / Pleos Connect v2.1.0 / Cold boot / RAM 4 GB**로 기기를 생성합니다. [에뮬레이터 설정](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/configure-pleos-connect-emulator)
 2. 기기를 부팅하고 `adb forward tcp:8088 tcp:8088`을 실행한 뒤 브라우저에서 `http://127.0.0.1:8088/`의 **Climate**를 엽니다. [Virtual Console](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/use-vehicle-emulator)
-3. Pleos Playground의 프로젝트 SDK 화면에서 Vehicle Control과 FusedLocation 사용 상태를 확인합니다. 공개 안내는 둘을 **준비 중**으로 표시합니다. [공식 Vehicle 샘플](https://document.pleos.ai/docs/pleos-only/tutorial/vehicle-sdk-sample-app)의 HVAC 화면에서 지원 여부와 권한을 확인하고, 공조 상태 조회 → 내기순환 변경 요청 → 실제 상태 콜백까지 확인합니다. 시제품은 현재 이 검증 전 단계입니다. [SDK 사용 상태 안내](https://document.pleos.ai/docs/pleos-only/create-my-project) · [HVAC API](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/Vehicle/vehicle/ai.pleos.playground.vehicle.api/h-v-a-c/entry)
+3. Pleos Playground의 프로젝트 SDK 화면에서 Vehicle Control과 FusedLocation 사용 상태를 확인합니다. 공개 안내는 둘을 **준비 중**으로 표시합니다. [공식 Vehicle 샘플](https://document.pleos.ai/docs/pleos-only/tutorial/vehicle-sdk-sample-app)의 HVAC 화면에서 지원 여부와 권한을 확인하고, 공조 상태 조회 → 내기순환 변경 요청 → 실제 상태 콜백까지 확인합니다. Pleos 에뮬레이터에서 GPS 시연의 내기순환 전환과 복원을 확인했습니다. [SDK 사용 상태 안내](https://document.pleos.ai/docs/pleos-only/create-my-project) · [HVAC API](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/Vehicle/vehicle/ai.pleos.playground.vehicle.api/h-v-a-c/entry)
 4. [FusedLocation](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/FusedLocation/intro)의 위치와 진행 방향을 등록 경로에 대조합니다. 실제 내비 경로 전체와의 연동은 [NaviHelper](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/NaviHelper/intro)가 제공하는 경로 데이터를 검증한 뒤 확장합니다.
 5. [ITS 공사 정보](https://www.its.go.kr/file/opendata/openapi_manual.pdf)와 [에어코리아 측정소 정보](https://www.data.go.kr/data/15073861/openapi.do)를 연결합니다. 공사 방향과 유효 시간을 확인할 수 있는 구간 하나와 측정소 하나를 먼저 선택합니다. 대기 등급은 인근 측정소의 관측값으로 표시합니다. API 키는 저장소와 공개 APK 밖에서 관리합니다.
 

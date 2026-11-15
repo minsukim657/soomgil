@@ -63,9 +63,7 @@ public final class MainActivity extends Activity {
 
     private static final String LOCATION_PERMISSION = "pleos.car.permission.FUSED_LOCATION";
     private static final int LOCATION_REQUEST = 410;
-    private static final double GPS_DEMO_LATITUDE = 37.442;
-    private static final double GPS_DEMO_START_LONGITUDE = 127.134;
-    private static final double GPS_DEMO_END_LONGITUDE = 127.135;
+    private static final SeobuDemoRoute GPS_DEMO_ROUTE = new SeobuDemoRoute();
     private boolean gpsTrip;
     private long gpsStartedAt;
     private LocationData previousFix;
@@ -135,6 +133,8 @@ public final class MainActivity extends Activity {
     private Button next;
     private Button manual;
     private Button demist;
+    private final VentilationInputBridge liveEnvironment =
+            new VentilationInputBridge(WORK_ZONE, java.time.Clock.systemUTC());
     private Button fetchEnvironment;
     private Spinner apiSample;
     private TextView environmentResult;
@@ -333,7 +333,7 @@ public final class MainActivity extends Activity {
         LinearLayout card = panel(root);
         addText(card, "공사·주변 대기 관측", 18, TEXT, true);
         addText(card, "시연 좌표 · 34.69806, 126.69637", 14, MUTED, false);
-        addButton(card, "GPS 시연 시작", view -> {
+        addButton(card, "서부간선도로 GPS 시연 시작", view -> {
             if (checkSelfPermission(LOCATION_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{LOCATION_PERMISSION}, LOCATION_REQUEST);
             } else {
@@ -408,14 +408,32 @@ public final class MainActivity extends Activity {
         apiClient.fetchAround(DEMO_LATITUDE, DEMO_LONGITUDE, new SoomgilApiClient.Callback() {
             @Override public void onSuccess(EnvironmentReading reading) {
                 fetchEnvironment.setEnabled(true);
-                environmentResult.setText(reading.toDisplayText());
+                showLiveEnvironment(reading);
             }
 
             @Override public void onFailure(String message) {
                 fetchEnvironment.setEnabled(true);
-                environmentResult.setText(EnvironmentReading.failure(message).toDisplayText());
+                showLiveEnvironment(EnvironmentReading.failure(message));
             }
         });
+    }
+
+    private void showLiveEnvironment(EnvironmentReading reading) {
+        // Live route matching must provide evidence for the same ITS work zone.
+        Observation input = liveEnvironment.observe(reading, null, 0,
+                enabled.isChecked(), false, false);
+        Decision decision = new VentilationPolicy().update(input, vehicleMode);
+        String air = switch (input.air()) {
+            case NORMAL -> "좋음/보통";
+            case POOR -> "나쁨 이상";
+            case UNKNOWN -> "확인 불가";
+        };
+        String control = decision.action() == Action.KEEP
+                ? "공조 유지 · 공사 구간과 차량 경로 일치 확인 필요"
+                : "공조 제어 조건 충족 · 시연 판단";
+        environmentResult.setText(reading.toDisplayText()
+                + "\n판단에 사용한 대기 등급 · " + air
+                + "\n" + control);
     }
 
     private void startSampleTrip(int selected) {
@@ -453,9 +471,8 @@ public final class MainActivity extends Activity {
 
         elapsed = (android.os.SystemClock.elapsedRealtime() - gpsStartedAt) / 1000;
         if (previousFix != null && fix.getTimestampMillis() <= previousFix.getTimestampMillis()) return;
-        // This eastbound fixture represents a single straight segment, with a 30 m corridor.
-        double crossTrackMeters = (fix.getLatitude() - GPS_DEMO_LATITUDE) * 111_195;
-        if (Math.abs(crossTrackMeters) > 30) {
+        SeobuDemoRoute.Match projection = GPS_DEMO_ROUTE.match(fix.getLatitude(), fix.getLongitude());
+        if (projection.offsetMeters() > 30) {
             clearGpsPosition();
             return;
         }
@@ -470,11 +487,11 @@ public final class MainActivity extends Activity {
         if (movement[0] < 10) return;
         previousFix = fix;
 
-        double metersPerDegree = 111_195 * Math.cos(Math.toRadians(GPS_DEMO_LATITUDE));
-        double distance = (fix.getLongitude() - GPS_DEMO_START_LONGITUDE) * metersPerDegree;
-        double end = (GPS_DEMO_END_LONGITUDE - GPS_DEMO_START_LONGITUDE) * metersPerDegree;
-        WorkZoneApproach.Position position = new WorkZoneApproach.Position(DEMO_ROAD_ID, distance, movement[1]);
-        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(DEMO_ROAD_ID, 0, end, DEMO_HEADING, trip.work());
+        WorkZoneApproach.Position position = new WorkZoneApproach.Position(
+                DEMO_ROAD_ID, projection.distanceMeters(), movement[1]);
+        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
+                DEMO_ROAD_ID, GPS_DEMO_ROUTE.startMeters(), GPS_DEMO_ROUTE.endMeters(),
+                projection.headingDegrees(), trip.work());
         gpsRoad = WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
         Log.d("SoomgilLocation", "GPS demo heading=" + movement[1] + " road=" + gpsRoad);
         update();

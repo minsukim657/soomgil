@@ -48,8 +48,7 @@ public final class VentilationInputBridgeTest {
             Decision result = new VentilationPolicy().update(input, Mode.AUTOMATIC);
             check(input.road() == Road.APPROACH, "Matched road approaches for all work statuses");
             check(input.air() == Air.POOR, "Air must stay identical");
-            check(result.action() == (status == EnvironmentReading.WorkStatus.IN_PROGRESS
-                    ? Action.SWITCH : Action.KEEP), "Only active construction starts an override");
+            check(result.action() == Action.SWITCH, "Poor air on verified approach can start an override");
         }
     }
 
@@ -92,7 +91,10 @@ public final class VentilationInputBridgeTest {
         Decision switched = policy.update(observe(live, route(50, 0)), Mode.FRESH_AIR);
         check(switched.action() == Action.SWITCH, "First request switches");
         check(policy.onApplied(switched.requestId(), true), "Ownership is confirmed only on application");
-        Decision restored = policy.update(observe(live, route(211, 0)), Mode.RECIRCULATION);
+        check(policy.update(observe(live, route(211, 0)), Mode.RECIRCULATION).action()
+                == Action.KEEP, "Poor air keeps recirculation after passage");
+        EnvironmentReading cleared = reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "2", "2026-11-13 15:00");
+        Decision restored = policy.update(observe(cleared, route(211, 0)), Mode.RECIRCULATION);
         check(restored.action() == Action.RESTORE && restored.target() == Mode.FRESH_AIR,
                 "Passage restores previous setting");
         VentilationPolicy other = new VentilationPolicy();

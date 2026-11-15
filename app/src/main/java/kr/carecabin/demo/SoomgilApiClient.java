@@ -172,7 +172,7 @@ final class SoomgilApiClient {
         return new EnvironmentReading(status, roadName, segment, direction, validFrom, validUntil,
                 station.optString("stationName", "측정소 미제공"), rawGrade, gradeLabel,
                 firstNonBlank(measurement.optString("dataTime", ""), "관측 시각 미제공"),
-                stationDistance, null);
+                stationDistance, null, number(work.optString("coordY")), number(work.optString("coordX")));
     }
 
     private JSONObject getJson(String address) throws IOException, JSONException {

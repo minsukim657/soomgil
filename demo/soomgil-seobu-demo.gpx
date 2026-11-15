@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Soomgil" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>서부간선도로 신정교에서 목동교 방면 GPS 시연</name><desc>서울경찰청 공지 구간의 교량 인근을 잇는 시연용 차도 경로. 좌표 © OpenStreetMap contributors. 실제 공사 경계는 별도 확인 필요.</desc></metadata>
+  <trk><name>신정교 방면에서 목동교 방면</name><trkseg>
+    <trkpt lat="37.5152643" lon="126.881747"><time>2026-11-15T03:00:00.000Z</time></trkpt>
+    <trkpt lat="37.5157059" lon="126.8820791"><time>2026-11-15T03:00:05.000Z</time></trkpt>
+    <trkpt lat="37.5159218" lon="126.882203"><time>2026-11-15T03:00:07.000Z</time></trkpt>
+    <trkpt lat="37.5162826" lon="126.8823542"><time>2026-11-15T03:00:11.000Z</time></trkpt>
+    <trkpt lat="37.5164911" lon="126.8824026"><time>2026-11-15T03:00:13.000Z</time></trkpt>
+    <trkpt lat="37.5169871" lon="126.8824424"><time>2026-11-15T03:00:18.000Z</time></trkpt>
+    <trkpt lat="37.5187001" lon="126.8822234"><time>2026-11-15T03:00:34.000Z</time></trkpt>
+    <trkpt lat="37.5197888" lon="126.8820525"><time>2026-11-15T03:00:44.000Z</time></trkpt>
+    <trkpt lat="37.521357" lon="126.8818467"><time>2026-11-15T03:00:59.000Z</time></trkpt>
+    <trkpt lat="37.523342" lon="126.8816416"><time>2026-11-15T03:01:17.000Z</time></trkpt>
+    <trkpt lat="37.5239359" lon="126.8816096"><time>2026-11-15T03:01:23.000Z</time></trkpt>
+    <trkpt lat="37.5244505" lon="126.8817115"><time>2026-11-15T03:01:28.000Z</time></trkpt>
+    <trkpt lat="37.5254096" lon="126.8822419"><time>2026-11-15T03:01:38.000Z</time></trkpt>
+    <trkpt lat="37.5257643" lon="126.8825443"><time>2026-11-15T03:01:42.000Z</time></trkpt>
+    <trkpt lat="37.5264666" lon="126.8836949"><time>2026-11-15T03:01:53.000Z</time></trkpt>
+    <trkpt lat="37.5272283" lon="126.8859204"><time>2026-11-15T03:02:11.000Z</time></trkpt>
+    <trkpt lat="37.5279039" lon="126.887516"><time>2026-11-15T03:02:24.000Z</time></trkpt>
+    <trkpt lat="37.528523" lon="126.8883959"><time>2026-11-15T03:02:33.000Z</time></trkpt>
+    <trkpt lat="37.5292136" lon="126.889064"><time>2026-11-15T03:02:41.000Z</time></trkpt>
+    <trkpt lat="37.5300554" lon="126.8896825"><time>2026-11-15T03:02:50.000Z</time></trkpt>
+    <trkpt lat="37.5307655" lon="126.8901697"><time>2026-11-15T03:02:57.000Z</time></trkpt>
+    <trkpt lat="37.5312346" lon="126.8905175"><time>2026-11-15T03:03:02.000Z</time></trkpt>
+    <trkpt lat="37.5320005" lon="126.8910719"><time>2026-11-15T03:03:10.000Z</time></trkpt>
+  </trkseg></trk>
+</gpx>
