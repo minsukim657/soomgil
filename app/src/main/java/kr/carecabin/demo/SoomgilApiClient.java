@@ -20,7 +20,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Fetches one nearby ITS construction record, its closest station, and the latest PM2.5 grade. */
+/** Fetches one ITS construction record on the demo road, its closest station, and the latest PM2.5 grade. */
 final class SoomgilApiClient {
     interface Callback {
         void onSuccess(EnvironmentReading reading);
@@ -29,7 +29,8 @@ final class SoomgilApiClient {
 
     private static final String ITS_URL = "https://openapi.its.go.kr:9443/eventInfo";
     private static final String AIR_BASE = "https://apis.data.go.kr/B552584";
-    private static final double SEARCH_RADIUS_KM = 25.0;
+    private static final double SEARCH_RADIUS_KM = 3.0;
+    private static final double ROUTE_CORRIDOR_METERS = 30.0;
     private static final ZoneId KOREA = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter ITS_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     private static final DateTimeFormatter DISPLAY_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
@@ -40,6 +41,7 @@ final class SoomgilApiClient {
         return thread;
     });
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final SeobuDemoRoute demoRoute = new SeobuDemoRoute();
 
     void fetchAround(double latitude, double longitude, Callback callback) {
         executor.execute(() -> {
@@ -91,14 +93,55 @@ final class SoomgilApiClient {
             double itemLat = number(item.optString("coordY"));
             double itemLon = number(item.optString("coordX"));
             if (Double.isNaN(itemLat) || Double.isNaN(itemLon)) continue;
+            if (!describesSeobuRoad(item) || !matchesNorthboundRoute(item)) continue;
+            SeobuDemoRoute.Match routeMatch = demoRoute.match(itemLat, itemLon);
+            if (routeMatch.offsetMeters() > ROUTE_CORRIDOR_METERS
+                    || routeMatch.distanceMeters() < demoRoute.startMeters()
+                    || routeMatch.distanceMeters() > demoRoute.endMeters()) continue;
             double distance = distanceKm(latitude, longitude, itemLat, itemLon);
             if (distance <= nearestDistance) {
                 nearest = item;
                 nearestDistance = distance;
             }
         }
-        if (nearest == null) throw new IOException("반경 25km 안에서 공사 정보를 찾지 못했습니다.");
+        if (nearest == null) throw new IOException("서부간선도로 북행 시연 경로와 일치하는 공사 정보를 찾지 못했습니다.");
         return nearest;
+    }
+
+    private boolean describesSeobuRoad(JSONObject item) {
+        String roadName = item.optString("roadName", "");
+        String message = item.optString("message", "");
+        return roadName.contains("서부간선도로") || roadName.contains("서부간선로")
+                || message.contains("서부간선도로") || message.contains("서부간선로");
+    }
+
+    private boolean matchesNorthboundRoute(JSONObject item) {
+        String message = item.optString("message", "");
+        String direction = item.optString("roadDrcType", "");
+        if (message.contains("양방향") || direction.contains("양방향")) return true;
+        if (direction.contains("북행") || direction.contains("상행")) return true;
+        if (direction.contains("남행") || direction.contains("하행")) return false;
+
+        String[] fields = message.split("::", -1);
+        if (fields.length < 4) return false;
+        String from = fields[2].trim();
+        String to = fields[3].trim();
+        boolean startsAtShinjeong = from.contains("신정교");
+        boolean endsTowardNorth = to.contains("목동교") || to.contains("오목교");
+        return startsAtShinjeong && endsTowardNorth;
+    }
+
+    private String routeDirectionLabel(JSONObject item) {
+        String message = item.optString("message", "");
+        String direction = item.optString("roadDrcType", "");
+        if (message.contains("양방향") || direction.contains("양방향")) return "양방향";
+        if (direction.contains("북행") || direction.contains("상행")) return "북행(시연 경로)";
+        String[] fields = message.split("::", -1);
+        if (fields.length >= 4 && fields[2].contains("신정교")
+                && (fields[3].contains("목동교") || fields[3].contains("오목교"))) {
+            return "북행(시연 경로)";
+        }
+        return firstNonBlank(direction, "북행(시연 경로 확인)");
     }
 
     private JSONObject findNearestStation(double latitude, double longitude) throws Exception {
@@ -157,10 +200,13 @@ final class SoomgilApiClient {
             status = EnvironmentReading.WorkStatus.IN_PROGRESS;
         }
 
-        String roadName = firstNonBlank(work.optString("roadName", ""), "도로명 미제공");
         String message = work.optString("message", "").trim();
+        String roadName = describesSeobuRoad(work) ? "서부간선도로" : "도로명 미제공";
         String segment = parseSegment(message, roadName);
-        String direction = firstNonBlank(work.optString("roadDrcType", ""), "방향 정보 없음");
+        String direction = routeDirectionLabel(work);
+        if ("양방향".equals(direction) && message.contains("신정교") && message.contains("목동교")) {
+            segment = "신정교~목동교";
+        }
         String validFrom = firstNonBlank(start, "시작 시각 미제공");
         String validUntil = firstNonBlank(end, "종료 시각 미제공");
         String rawGrade = firstNonBlank(measurement.optString("pm25Grade1h", ""),

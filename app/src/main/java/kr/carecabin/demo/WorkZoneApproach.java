@@ -4,7 +4,7 @@ import java.util.Objects;
 
 import static kr.carecabin.demo.VentilationPolicy.*;
 
-/** Optional normalization boundary for fixtures/future map matching; not a GPS or API client. */
+/** Classifies an on-route position against a direction-aware work-zone segment. */
 final class WorkZoneApproach {
     // Distances increase in the target road direction; headings use degrees, north = 0.
     record Position(String roadId, double distanceMeters, double headingDegrees) {}
