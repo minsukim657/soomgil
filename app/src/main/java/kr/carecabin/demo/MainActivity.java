@@ -25,12 +25,14 @@ import java.util.ArrayDeque;
 import static kr.carecabin.demo.VentilationPolicy.*;
 
 public final class MainActivity extends Activity {
-    private static final int BACKGROUND = Color.rgb(8, 19, 27);
-    private static final int SURFACE = Color.rgb(18, 35, 45);
-    private static final int INSET = Color.rgb(13, 27, 36);
-    private static final int MINT = Color.rgb(125, 236, 197);
-    private static final int MUTED = Color.rgb(181, 202, 212);
-    private static final int AMBER = Color.rgb(255, 206, 133);
+    private static final int BACKGROUND = Color.rgb(246, 247, 248);
+    private static final int SURFACE = Color.WHITE;
+    private static final int INSET = Color.rgb(243, 245, 247);
+    private static final int ACCENT = Color.rgb(67, 132, 245);
+    private static final int ACCENT_SOFT = Color.rgb(231, 239, 255);
+    private static final int TEXT = Color.rgb(24, 27, 31);
+    private static final int MUTED = Color.rgb(105, 112, 120);
+    private static final int AMBER = Color.rgb(205, 112, 20);
     private static final String[] STAGES = {"출발", "공사 구간 진입 전", "공사 구간 통과 중", "구간 통과 후"};
     private static final long DEMO_STEP_DELAY_MS = 3000;
     private static final long[] STEP_TIMES = {0, 10, 20, 30};
@@ -63,6 +65,7 @@ public final class MainActivity extends Activity {
     private Mode vehicleMode = Mode.AUTOMATIC;
     private boolean driverIntervened;
     private boolean defrost;
+    private float uiScale = 1f;
 
     private Spinner scenario;
     private Switch enabled;
@@ -79,6 +82,7 @@ public final class MainActivity extends Activity {
     private boolean appControlInFlight;
     private boolean activityResumed;
     private final Runnable pollVehicleState = this::pollActualVehicleState;
+    private Button next;
     private Button manual;
     private Button demist;
     private Button fetchEnvironment;
@@ -92,58 +96,67 @@ public final class MainActivity extends Activity {
         // prove Vehicle Service connectivity or HVAC availability.
         pleosVehicleManager = new PleosVehicleManager(this);
         pleosVehicleManager.initialize();
-        boolean wide = getResources().getConfiguration().screenWidthDp >= 760;
+        boolean wide = getResources().getConfiguration().screenWidthDp >= 600;
+        uiScale = wide ? 1.45f : 1f;
+        getWindow().setStatusBarColor(BACKGROUND);
+        getWindow().setNavigationBarColor(BACKGROUND);
+        getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BACKGROUND);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(wide ? 28 : 16), dp(20), dp(wide ? 28 : 16), dp(20));
+        root.setPadding(dp(wide ? 20 : 16), dp(wide ? 10 : 16), dp(wide ? 20 : 16), dp(wide ? 10 : 16));
         scroll.addView(root);
         setContentView(scroll);
 
         LinearLayout header = new LinearLayout(this);
         header.setGravity(android.view.Gravity.CENTER_VERTICAL);
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
-        TextView title = addText(header, "숨길", 32, Color.WHITE, true);
+        TextView title = addText(header, "숨길", 27, TEXT, true);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
-        TextView demo = addText(header, "가상 주행", 14, MINT, true);
-        demo.setBackground(surface(SURFACE, 20));
+        TextView demo = addText(header, "가상 주행", 13, ACCENT, true);
+        demo.setBackground(surface(ACCENT_SOFT, 20));
         demo.setPadding(dp(14), dp(7), dp(14), dp(7));
-        addText(root, "주행 경로에 맞춘 공조", 16, MUTED, false);
-        buildEnvironmentPanel(root);
+        addText(root, "주행 경로에 맞춘 공조", 14, MUTED, false);
+
+        if (!wide) buildEnvironmentPanel(root);
 
         LinearLayout columns = new LinearLayout(this);
         columns.setOrientation(wide ? LinearLayout.HORIZONTAL : LinearLayout.VERTICAL);
         root.addView(columns, new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout overview = new LinearLayout(this);
-        overview.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout side = new LinearLayout(this);
-        side.setOrientation(LinearLayout.VERTICAL);
-        columns.addView(overview, wide ? new LinearLayout.LayoutParams(0, -2, 3)
-                : new LinearLayout.LayoutParams(-1, -2));
-        LinearLayout.LayoutParams sideLayout = wide ? new LinearLayout.LayoutParams(0, -2, 2)
-                : new LinearLayout.LayoutParams(-1, -2);
-        if (wide) sideLayout.setMarginStart(dp(16));
-        columns.addView(side, sideLayout);
+        LinearLayout statusColumn = column();
+        LinearLayout environmentColumn = column();
+        LinearLayout controlsColumn = column();
+        if (wide) {
+            addWideColumn(columns, statusColumn, 1.2f, false, true);
+            addWideColumn(columns, environmentColumn, 1.2f, true, true);
+            addWideColumn(columns, controlsColumn, 0.8f, true, false);
+            buildEnvironmentPanel(root);
+        } else {
+            columns.addView(statusColumn, new LinearLayout.LayoutParams(-1, -2));
+            columns.addView(environmentColumn, new LinearLayout.LayoutParams(-1, -2));
+            columns.addView(controlsColumn, new LinearLayout.LayoutParams(-1, -2));
+        }
 
-        LinearLayout dashboard = panel(overview);
+        LinearLayout dashboard = panel(statusColumn);
         addText(dashboard, "현재 차량 공조 상태", 15, MUTED, true);
-        mode = addText(dashboard, "차량 기본 공조", 34, Color.WHITE, true);
+        mode = addText(dashboard, "차량 기본 공조", 30, TEXT, true);
         mode.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         addText(dashboard, "동작 이유", 14, MUTED, true);
-        status = addText(dashboard, "시연을 시작하면 공조 판단이 표시돼요.", 17, Color.WHITE, false);
+        status = addText(dashboard, "시연을 시작하면 공조 판단이 표시돼요.", 16, TEXT, false);
 
-        LinearLayout environment = panel(overview);
-        addText(environment, "경로의 환경 정보", 20, Color.WHITE, true);
+        LinearLayout environment = panel(environmentColumn);
+        addText(environment, "경로의 환경 정보", 19, TEXT, true);
         route = addText(environment, "주행 시작 전", 15, MUTED, false);
         LinearLayout metrics = new LinearLayout(this);
         environment.addView(metrics, new LinearLayout.LayoutParams(-1, -2));
         workValue = addMetric(metrics, "도로 공사", false);
         airValue = addMetric(metrics, "인근 초미세먼지", true);
 
-        LinearLayout settings = panel(side);
-        addText(settings, "시연 조작", 20, Color.WHITE, true);
+        LinearLayout settings = panel(controlsColumn);
+        addText(settings, "시연 조작", 19, TEXT, true);
         addText(settings, "주행을 시작하면 공사 구간에 자동으로 접근하고 통과해요.", 14, MUTED, false);
         scenario = new Spinner(this);
         ArrayAdapter<Scenario> options = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, SCENARIOS);
@@ -153,13 +166,16 @@ public final class MainActivity extends Activity {
         settings.addView(scenario, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
         enabled = new Switch(this);
         enabled.setText("자동 공조 전환");
+        enabled.setTextSize(16 * uiScale);
         enabled.setChecked(true);
         enabled.setMinHeight(dp(48));
         settings.addView(enabled, new LinearLayout.LayoutParams(-1, -2));
-        Button start = addButton(settings, "이 조건으로 주행 시작", view -> startTrip(SCENARIOS[scenario.getSelectedItemPosition()]));
-        start.setBackgroundTintList(ColorStateList.valueOf(MINT));
-        start.setTextColor(BACKGROUND);
+        Button start = addButton(settings, "이 조건으로 주행 시작",
+                view -> startTrip(SCENARIOS[scenario.getSelectedItemPosition()]));
+        start.setBackgroundTintList(ColorStateList.valueOf(ACCENT));
+        start.setTextColor(Color.WHITE);
 
+        next = addButton(settings, "다음 구간", view -> advance());
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         settings.addView(controls);
@@ -179,8 +195,18 @@ public final class MainActivity extends Activity {
         Button hvacOffTest = addButton(settings, "실차 내기순환 OFF 테스트", view ->
                 confirmHvacTest(false));
 
-        LinearLayout changes = panel(side);
-        addText(changes, "가상 주행 기록", 19, Color.WHITE, true);
+        if (wide) {
+            columns.post(() -> {
+                int controlsHeight = settings.getMeasuredHeight();
+                if (controlsHeight > 0) {
+                    matchPanelHeight(dashboard, controlsHeight);
+                    matchPanelHeight(environment, controlsHeight);
+                }
+            });
+        }
+
+        LinearLayout changes = panel(wide ? root : controlsColumn);
+        addText(changes, "가상 주행 기록", 18, TEXT, true);
         log = addText(changes, "아직 변경이 없어요.", 15, MUTED, false);
         enabled.setOnCheckedChangeListener((button, checked) -> {
             if (started) update();
@@ -235,7 +261,7 @@ public final class MainActivity extends Activity {
 
     private void renderLiveVehicleMode() {
         mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
-        mode.setTextColor(recirculating ? MINT : Color.WHITE);
+        mode.setTextColor(recirculating ? ACCENT : TEXT);
         status.setText("실제 차량 공조 상태를 표시하고 있어요.");
     }
 
@@ -255,9 +281,11 @@ public final class MainActivity extends Activity {
 
     private void buildEnvironmentPanel(LinearLayout root) {
         LinearLayout card = panel(root);
-        addText(card, "공사·주변 대기 관측", 20, Color.WHITE, true);
+        addText(card, "공사·주변 대기 관측", 18, TEXT, true);
         addText(card, "시연 좌표 · 34.69806, 126.69637", 14, MUTED, false);
         fetchEnvironment = addButton(card, "실제 API에서 조회", view -> fetchEnvironment());
+        fetchEnvironment.setBackgroundTintList(ColorStateList.valueOf(ACCENT));
+        fetchEnvironment.setTextColor(Color.WHITE);
         apiSample = new Spinner(this);
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
                 android.R.layout.simple_spinner_item, API_SAMPLES);
@@ -399,7 +427,7 @@ public final class MainActivity extends Activity {
 
     private void renderDashboard(Work work, Air air) {
         mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
-        mode.setTextColor(recirculating ? MINT : Color.WHITE);
+        mode.setTextColor(recirculating ? ACCENT : TEXT);
         if (defrost || driverIntervened) {
             status.setText(priorityReason());
         } else if (!enabled.isChecked()) {
@@ -438,9 +466,9 @@ public final class MainActivity extends Activity {
         };
         route.setText("주행 단계 · " + STAGES[stage]);
         workValue.setText(workLabel);
-        workValue.setTextColor(work == Work.ACTIVE ? AMBER : Color.WHITE);
+        workValue.setTextColor(work == Work.ACTIVE ? AMBER : TEXT);
         airValue.setText(airLabel);
-        airValue.setTextColor(air == Air.POOR ? AMBER : Color.WHITE);
+        airValue.setTextColor(air == Air.POOR ? AMBER : TEXT);
     }
 
     private String priorityReason() {
@@ -455,6 +483,7 @@ public final class MainActivity extends Activity {
     private void updateButtons() {
         manual.setEnabled(started && !driverIntervened && !defrost);
         demist.setEnabled(started && !defrost);
+        next.setEnabled(started && stage < STAGES.length - 1);
     }
 
     @Override
@@ -483,38 +512,59 @@ public final class MainActivity extends Activity {
     private LinearLayout panel(LinearLayout parent) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(16), dp(14), dp(16), dp(14));
-        box.setBackground(surface(SURFACE, 16));
+        box.setPadding(dp(14), dp(11), dp(14), dp(11));
+        box.setBackground(surface(SURFACE, 12));
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(-1, -2);
-        layout.topMargin = dp(14);
+        layout.topMargin = dp(10);
         parent.addView(box, layout);
         return box;
+    }
+
+    private LinearLayout column() {
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        return column;
+    }
+
+    private void matchPanelHeight(LinearLayout panel, int height) {
+        ViewGroup.LayoutParams layout = panel.getLayoutParams();
+        layout.height = height;
+        panel.setLayoutParams(layout);
+    }
+
+    private void addWideColumn(LinearLayout parent, LinearLayout column, float weight,
+                               boolean marginStart, boolean marginEnd) {
+        LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(0, -2, weight);
+        if (marginStart) layout.setMarginStart(dp(6));
+        if (marginEnd) layout.setMarginEnd(dp(6));
+        parent.addView(column, layout);
     }
 
     private TextView addMetric(LinearLayout parent, String label, boolean second) {
         LinearLayout tile = new LinearLayout(this);
         tile.setOrientation(LinearLayout.VERTICAL);
-        tile.setBackground(surface(INSET, 12));
+        tile.setBackground(surface(INSET, 10));
         tile.setPadding(dp(12), dp(8), dp(12), dp(8));
         LinearLayout.LayoutParams layout = new LinearLayout.LayoutParams(0, -2, 1);
         layout.topMargin = dp(8);
         if (second) layout.setMarginStart(dp(10));
         parent.addView(tile, layout);
         addText(tile, label, 14, MUTED, false);
-        return addText(tile, "—", 20, Color.WHITE, true);
+        return addText(tile, "—", 20, TEXT, true);
     }
 
     private GradientDrawable surface(int color, int radius) {
         GradientDrawable background = new GradientDrawable();
         background.setColor(color);
         background.setCornerRadius(dp(radius));
+        background.setStroke(dp(1), Color.rgb(228, 231, 234));
         return background;
     }
 
     private TextView addText(LinearLayout parent, String value, int size, int color, boolean bold) {
         TextView text = new TextView(this);
         text.setText(value);
-        text.setTextSize(size);
+        text.setTextSize(size * uiScale);
         text.setTextColor(color);
         if (bold) text.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         text.setPadding(0, dp(4), 0, dp(4));
@@ -526,8 +576,11 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
-        button.setMinHeight(dp(48));
+        button.setTextSize(16 * uiScale);
+        button.setMinHeight(dp(52));
         button.setOnClickListener(listener);
+        button.setBackgroundTintList(ColorStateList.valueOf(Color.rgb(235, 238, 242)));
+        button.setTextColor(TEXT);
         if (parent.getOrientation() == LinearLayout.HORIZONTAL) {
             parent.addView(button, new LinearLayout.LayoutParams(0, -2, 1));
         } else {
@@ -537,7 +590,7 @@ public final class MainActivity extends Activity {
     }
 
     private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+        return Math.round(value * uiScale * getResources().getDisplayMetrics().density);
     }
 }
 
