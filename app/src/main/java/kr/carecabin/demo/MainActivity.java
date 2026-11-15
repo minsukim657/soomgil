@@ -229,8 +229,48 @@ public final class MainActivity extends Activity {
         addText(settings, "시연 조작", 19, TEXT, true);
         addText(settings, "주행을 시작하면 공사 구간에 자동으로 접근하고 통과해요.", 14, MUTED, false);
         scenario = new Spinner(this);
-        ArrayAdapter<Scenario> options = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, SCENARIOS);
-        options.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ArrayAdapter<Scenario> options =
+                new ArrayAdapter<Scenario>(
+                        this,
+                        android.R.layout.simple_spinner_item,
+                        SCENARIOS) {
+
+                    @Override
+                    public View getView(int position,
+                                        View convertView,
+                                        ViewGroup parent) {
+
+                        TextView tv = (TextView)
+                                super.getView(position, convertView, parent);
+
+                        tv.setTextColor(TEXT);
+                        tv.setTextSize(15 * uiScale);
+                        tv.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                        scenario.setBackground(surface(INSET, 10));
+                        return tv;
+                    }
+
+                    @Override
+                    public View getDropDownView(int position,
+                                                View convertView,
+                                                ViewGroup parent) {
+
+                        TextView tv = (TextView)
+                                super.getDropDownView(
+                                        position,
+                                        convertView,
+                                        parent);
+
+                        tv.setTextColor(Color.WHITE);
+                        tv.setTextSize(16 * uiScale);
+
+                        return tv;
+                    }
+                };
+
+        options.setDropDownViewResource(
+                android.R.layout.simple_spinner_dropdown_item);
+
         scenario.setAdapter(options);
         scenario.setContentDescription("시연 조건 선택");
         settings.addView(scenario, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50)));
