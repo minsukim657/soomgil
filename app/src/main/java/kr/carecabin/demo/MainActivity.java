@@ -125,6 +125,7 @@ public final class MainActivity extends Activity {
     private Switch enabled;
     private TextView mode;
     private TextView status;
+    private TextView climateFeedback;
     private TextView route;
     private TextView workValue;
     private TextView airValue;
@@ -203,6 +204,9 @@ public final class MainActivity extends Activity {
         mode.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         addText(dashboard, "동작 이유", 14, MUTED, true);
         status = addText(dashboard, "시연을 시작하면 공조 판단이 표시돼요.", 16, TEXT, false);
+        climateFeedback = addText(dashboard, "", 14, MUTED, false);
+        climateFeedback.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        climateFeedback.setVisibility(View.GONE);
 
         LinearLayout environment = panel(environmentColumn);
         addText(environment, "경로의 환경 정보", 19, TEXT, true);
@@ -247,10 +251,17 @@ public final class MainActivity extends Activity {
             update();
         });
 
-        Button hvacOnTest = addButton(settings, "실차 내기순환 ON 테스트", view ->
-                confirmHvacTest(true));
-        Button hvacOffTest = addButton(settings, "실차 내기순환 OFF 테스트", view ->
-                confirmHvacTest(false));
+        LinearLayout diagnostics = new LinearLayout(this);
+        diagnostics.setOrientation(LinearLayout.VERTICAL);
+        diagnostics.setVisibility(View.GONE);
+        addButton(settings, "공조 연결 테스트 열기", view -> {
+            boolean open = diagnostics.getVisibility() != View.VISIBLE;
+            diagnostics.setVisibility(open ? View.VISIBLE : View.GONE);
+            ((Button) view).setText(open ? "공조 연결 테스트 닫기" : "공조 연결 테스트 열기");
+        });
+        settings.addView(diagnostics, new LinearLayout.LayoutParams(-1, -2));
+        addButton(diagnostics, "내기순환 켜기 요청", view -> confirmHvacTest(true));
+        addButton(diagnostics, "내기순환 끄기 요청", view -> confirmHvacTest(false));
 
         if (wide) {
             columns.post(() -> {
@@ -329,11 +340,37 @@ public final class MainActivity extends Activity {
                 .setMessage("연결된 테스트 차량의 내기 순환을 " + action
                         + " 요청합니다. 차량이 안전하게 정차해 있고 테스트해도 되는지 확인하세요.")
                 .setNegativeButton("취소", (dialog, which) -> dialog.dismiss())
-                .setPositiveButton("요청", (dialog, which) -> {
-                    if (pleosVehicleManager != null)
-                        pleosVehicleManager.setRecirculationForTest(enabled);
-                })
+                .setPositiveButton("요청", (dialog, which) -> runHvacTest(enabled))
                 .show();
+    }
+
+    private void runHvacTest(boolean requestedState) {
+        if (appControlInFlight) return;
+        if (pleosVehicleManager == null) {
+            showClimateFeedback("공조 테스트 실패 · Pleos 차량 연결을 확인해 주세요.", true);
+            return;
+        }
+        appControlInFlight = true;
+        if (started) {
+            driverIntervened = true;
+            update();
+        }
+        showClimateFeedback("공조 테스트 요청 중…", false);
+        pleosVehicleManager.setRecirculation(requestedState,
+                (requested, verified, actual, detail) -> runOnUiThread(() -> {
+                    appControlInFlight = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    String result = verified
+                            ? "공조 테스트 완료 · 내기순환 " + (requested ? "ON" : "OFF") + " 확인"
+                            : "공조 테스트 실패 · " + detail;
+                    showClimateFeedback(result, !verified);
+                }));
+    }
+
+    private void showClimateFeedback(String message, boolean error) {
+        climateFeedback.setText(message);
+        climateFeedback.setTextColor(error ? AMBER : MUTED);
+        climateFeedback.setVisibility(message.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private void buildEnvironmentPanel(LinearLayout root) {
@@ -653,6 +690,7 @@ public final class MainActivity extends Activity {
             gpsRouteEvidence = null;
             trip = selected;
             policy = new VentilationPolicy();
+            showClimateFeedback("", false);
             history.clear();
             stage = 0;
             elapsed = 0;
@@ -717,14 +755,22 @@ public final class MainActivity extends Activity {
                     if (pleosVehicleManager == null) {
                         policy.onApplied(requestId, false);
                         record("Pleos 연결 없음 · 공조 변경을 적용하지 못했어요.");
+                        showClimateFeedback("공조 변경 실패 · Pleos 차량 연결을 확인해 주세요.", true);
                     } else {
+                        final VentilationPolicy requestPolicy = policy;
                         appControlInFlight = true;
+                        showClimateFeedback("차량 공조 변경 확인 중…", false);
                         pleosVehicleManager.setRecirculation(requestedRecirculation,
                                 (requested, verified, actual, detail) -> runOnUiThread(() -> {
                                     appControlInFlight = false;
-                                    if (policy == null || !policy.isPending(requestId)) return;
+                                    if (isFinishing() || isDestroyed() || policy != requestPolicy) return;
+                                    if (!policy.isPending(requestId)) {
+                                        showClimateFeedback("", false);
+                                        return;
+                                    }
                                     policy.onApplied(requestId, verified);
                                     if (verified) {
+                                        showClimateFeedback("", false);
                                         vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
                                         recirculating = actual;
                                         record(requestedAction == Action.SWITCH
@@ -732,8 +778,9 @@ public final class MainActivity extends Activity {
                                                 : "공사 구간 통과/자동화 종료 · 실제 차량 공조 상태 복원 확인");
                                     } else {
                                         record("공조 변경 확인 실패 · " + detail);
+                                        showClimateFeedback("공조 변경 확인 실패 · " + detail, true);
                                     }
-                                    renderDashboard(road, trip.work(), air);
+                                    renderDashboard(road, work, air);
                                     log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
                                     updateButtons();
                                 }));

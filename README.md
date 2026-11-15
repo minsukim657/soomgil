@@ -36,8 +36,10 @@
 
 ## 공모전 제출 기준
 
+[시연 순서와 발표 대본](docs/demo-guide.md)을 참고하세요.
+
 - **2026년 11월 15일 1차 접수 마감**. 접수양식과 팀원 전원의 서명·동의를 준비합니다. 영상과 GitHub·APK는 선택 제출입니다. [공모전 일정](https://appdevchallenge.auto-hmg.io/guide/schedule) · [제출 방법](https://appdevchallenge.auto-hmg.io/guide/submission)
-- GitHub 산출물로 제출할 때는 실행을 확인한 release APK를 `apk/팀명_앱이름_release.apk` 경로에 넣습니다. 비공개 저장소의 경우 공지된 심사 계정의 접근을 확인합니다. `Soomgil-demo.apk`는 가상 입력으로 구동하는 내부 시연용입니다. [제출 방법](https://appdevchallenge.auto-hmg.io/guide/submission)
+- GitHub 산출물로 제출할 때는 실행을 확인한 release APK를 `apk/팀명_앱이름_release.apk` 경로에 넣습니다. 접수 메일에 저장소 주소와 최종 커밋 해시를 적습니다. 공식 안내에 따르면 비공개 저장소는 11월 16일까지 공개로 전환해 11월 23일까지 유지하거나, 공개가 어려우면 접수 마감 전 소스와 APK 압축본 다운로드 주소를 제출할 수 있습니다. `Soomgil-demo.apk`는 가상 입력으로 구동하는 내부 시연용입니다. [제출 방법](https://appdevchallenge.auto-hmg.io/guide/submission)
 - **2026년 12월 3~4일 2차 PT**. 실제 동작 가능한 앱 시연을 준비합니다. [심사·시상](https://appdevchallenge.auto-hmg.io/guide/judging-awards)
 
 ## 자동 전환 정책 테스트 및 연동

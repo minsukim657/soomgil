@@ -264,13 +264,6 @@ public final class PleosVehicleManager {
         }
     }
 
-    /** Manual diagnostic buttons retained for isolated testing. */
-    public void setRecirculationForTest(boolean enabled) {
-        setRecirculation(enabled, (requested, verified, actual, detail) ->
-                Log.i(TAG, "Manual HVAC test completed: requested=" + requested
-                        + ", verified=" + verified + ", actual=" + actual + ", detail=" + detail));
-    }
-
     public void release() {
         verificationHandler.removeCallbacksAndMessages(null);
         if (vehicle == null) return;
