@@ -6,6 +6,9 @@
 
     <application android:label="숨길" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false">
         <activity android:name="kr.carecabin.demo.MainActivity" android:exported="true">
+            <!-- Experimental Pleos driving-availability declaration.
+                 Retained from the previously tested build. -->
+            <meta-data android:name="distractionOptimized" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
