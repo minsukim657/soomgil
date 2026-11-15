@@ -82,7 +82,8 @@ final class VentilationInputBridge {
         }
         return switch (reading.pm25Grade.trim()) {
             case "1", "2" -> Air.NORMAL;
-            case "3", "4" -> Air.POOR;
+            case "3" -> Air.POOR;
+            case "4" -> Air.VERY_POOR;
             default -> Air.UNKNOWN;
         };
     }

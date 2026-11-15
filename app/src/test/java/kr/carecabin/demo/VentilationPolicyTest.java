@@ -6,6 +6,7 @@ public final class VentilationPolicyTest {
     private static int checks;
 
     public static void main(String[] args) {
+        checkScenarioMatrix();
         VentilationPolicy p = new VentilationPolicy();
         keep(p, Road.BEFORE, Work.ACTIVE, Air.NORMAL, Mode.AUTOMATIC);
         applied(expect(p, Road.APPROACH, Work.ACTIVE, Air.NORMAL, Mode.AUTOMATIC,
@@ -66,6 +67,30 @@ public final class VentilationPolicyTest {
                 Action.RESTORE, Reason.RISKS_CLEARED), p, Mode.AUTOMATIC);
 
         System.out.println("PASS: " + checks + " policy assertions");
+    }
+
+    private static void checkScenarioMatrix() {
+        for (Air air : Air.values()) {
+            VentilationPolicy construction = new VentilationPolicy();
+            expect(construction, Road.BEFORE, Work.ACTIVE, air, Mode.AUTOMATIC,
+                    air.isPoor() ? Action.SWITCH : Action.KEEP,
+                    air.isPoor() ? Reason.POOR_AIR
+                            : air == Air.UNKNOWN ? Reason.INFORMATION_UNAVAILABLE : Reason.NO_RISK);
+
+            construction = new VentilationPolicy();
+            applied(expect(construction, Road.APPROACH, Work.ACTIVE, air, Mode.AUTOMATIC,
+                    Action.SWITCH, Reason.CONSTRUCTION), construction, Mode.RECIRCULATION);
+            Decision passed = construction.update(
+                    new Observation(Road.PASSED, Work.ACTIVE, air, 30, true, false, false),
+                    Mode.RECIRCULATION);
+            check(passed.action() == (air == Air.NORMAL ? Action.RESTORE : Action.KEEP),
+                    "Construction passage with " + air + ": " + passed);
+
+            expect(new VentilationPolicy(), Road.GENERAL, Work.NONE, air, Mode.AUTOMATIC,
+                    air.isPoor() ? Action.SWITCH : Action.KEEP,
+                    air.isPoor() ? Reason.POOR_AIR
+                            : air == Air.UNKNOWN ? Reason.INFORMATION_UNAVAILABLE : Reason.NO_RISK);
+        }
     }
 
     private static Decision expect(VentilationPolicy p, Road road, Work work, Air air,

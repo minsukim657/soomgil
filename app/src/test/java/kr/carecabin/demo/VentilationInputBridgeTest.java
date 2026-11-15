@@ -73,10 +73,10 @@ public final class VentilationInputBridgeTest {
             check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, grade, "2026-11-13 15:00"),
                     route(50, 0)).air() == Air.NORMAL, "Good/moderate -> normal");
         }
-        for (String grade : new String[] {"3", "4"}) {
-            check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, grade, "2026-11-13 15:00"),
-                    route(50, 0)).air() == Air.POOR, "Poor/very poor -> poor");
-        }
+        check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "3", "2026-11-13 15:00"),
+                route(50, 0)).air() == Air.POOR, "Grade 3 -> poor");
+        check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "4", "2026-11-13 15:00"),
+                route(50, 0)).air() == Air.VERY_POOR, "Grade 4 -> very poor");
         check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "3", "2026-11-13 12:00"),
                 route(50, 0)).air() == Air.UNKNOWN, "Stale air is unknown");
         check(observe(reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "3", "invalid"),

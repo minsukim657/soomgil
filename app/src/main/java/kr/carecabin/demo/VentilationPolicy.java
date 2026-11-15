@@ -4,9 +4,15 @@ import java.util.Objects;
 
 /** Keeps the driver's preference while applying temporary, independent risk overrides. */
 final class VentilationPolicy {
-    enum Road { BEFORE, APPROACH, WORK_ZONE, PASSED, OPPOSITE, UNKNOWN }
-    enum Work { ACTIVE, ENDED, UNKNOWN }
-    enum Air { NORMAL, POOR, UNKNOWN }
+    enum Road { GENERAL, BEFORE, APPROACH, WORK_ZONE, PASSED, OPPOSITE, UNKNOWN }
+    enum Work { NONE, ACTIVE, ENDED, UNKNOWN }
+    enum Air {
+        NORMAL, POOR, VERY_POOR, UNKNOWN;
+
+        boolean isPoor() {
+            return this == POOR || this == VERY_POOR;
+        }
+    }
     enum Mode { FRESH_AIR, RECIRCULATION, AUTOMATIC, UNKNOWN }
     enum Action { SWITCH, RESTORE, KEEP }
     enum Reason {
@@ -47,7 +53,7 @@ final class VentilationPolicy {
         if (currentMode == Mode.UNKNOWN) return keep(Reason.INFORMATION_UNAVAILABLE);
 
         boolean construction = constructionRisk(input.road(), input.work());
-        boolean poorAir = input.air() == Air.POOR;
+        boolean poorAir = input.air().isPoor();
         boolean risk = construction || poorAir;
         boolean unavailable = informationUnavailable(input.road(), input.work(), input.air());
         boolean manual = input.driverIntervened()
