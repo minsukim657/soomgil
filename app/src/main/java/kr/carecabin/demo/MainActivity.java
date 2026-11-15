@@ -54,6 +54,7 @@ public final class MainActivity extends Activity {
 
     private static final Scenario[] SCENARIOS = {
             new Scenario("공사 진행 · 접근 시 대기 나쁨", Work.ACTIVE, Air.POOR, Air.NORMAL),
+            new Scenario("공사 진행 · 대기 매우 나쁨", Work.ACTIVE, Air.POOR, Air.NORMAL),
             new Scenario("공사 종료 · 같은 도로와 대기 등급", Work.ENDED, Air.POOR, Air.NORMAL),
             new Scenario("공사 정보 확인 불가", Work.UNKNOWN, Air.POOR, Air.NORMAL),
             new Scenario("공사 진행 · 대기 정보 확인 불가", Work.ACTIVE, Air.UNKNOWN, Air.NORMAL),
@@ -119,6 +120,7 @@ public final class MainActivity extends Activity {
     private Switch enabled;
     private TextView mode;
     private TextView status;
+    private SoomgilCharacterView characterGuide;
     private TextView route;
     private TextView workValue;
     private TextView airValue;
@@ -170,6 +172,12 @@ public final class MainActivity extends Activity {
         demo.setBackground(surface(ACCENT_SOFT, 20));
         demo.setPadding(dp(14), dp(7), dp(14), dp(7));
         addText(root, "주행 경로에 맞춘 공조", 14, MUTED, false);
+        characterGuide = new SoomgilCharacterView(this);
+        LinearLayout.LayoutParams mascotLayout = new LinearLayout.LayoutParams(-1, -2);
+        mascotLayout.topMargin = dp(10);
+        root.addView(characterGuide, mascotLayout);
+        characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                "안녕하세요! 숨길이가 오늘도 쾌적한 주행을 도와드릴게요.");
 
         if (!wide) buildEnvironmentPanel(root);
 
@@ -434,6 +442,22 @@ public final class MainActivity extends Activity {
         environmentResult.setText(reading.toDisplayText()
                 + "\n판단에 사용한 대기 등급 · " + air
                 + "\n" + control);
+        if (characterGuide != null) {
+            String grade = reading.pm25Grade;
+            if ("4".equals(grade)) {
+                characterGuide.show(SoomgilCharacterView.Emotion.SEVERE,
+                        "주변 초미세먼지가 매우 나쁨이에요! 실제 경로와 공사 구간의 일치를 확인해야 해요.");
+            } else if ("3".equals(grade)) {
+                characterGuide.show(SoomgilCharacterView.Emotion.POOR,
+                        "주변 초미세먼지가 나쁨이에요. 안전한 공조 판단을 위해 주행 경로를 확인할게요.");
+            } else if ("1".equals(grade) || "2".equals(grade)) {
+                characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                        "조회한 주변 대기질은 양호해요. 주행 경로도 함께 확인할게요.");
+            } else {
+                characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                        "대기질 정보를 확인하지 못했어요. 자동 전환은 보류할게요.");
+            }
+        }
     }
 
     private void startSampleTrip(int selected) {
@@ -654,6 +678,39 @@ public final class MainActivity extends Activity {
         workValue.setTextColor(work == Work.ACTIVE ? AMBER : TEXT);
         airValue.setText(airLabel);
         airValue.setTextColor(air == Air.POOR ? AMBER : TEXT);
+        updateCharacter(road, air);
+    }
+
+    private void updateCharacter(Road road, Air air) {
+        if (characterGuide == null) return;
+        if (road == Road.PASSED && air == Air.NORMAL) {
+            characterGuide.show(SoomgilCharacterView.Emotion.CLEARED,
+                    "오염 구간을 지났어요! 주변 대기질도 안정됐으니 공조 상태를 확인해볼게요.");
+            return;
+        }
+        if (air == Air.POOR) {
+            boolean severe = trip != null && trip.title().contains("매우 나쁨");
+            if (severe) {
+                characterGuide.show(SoomgilCharacterView.Emotion.SEVERE,
+                        "주의해 주세요! 현재 대기 오염이 매우 심해요. 오염 위험이 해소될 때까지 공조 상태를 유지할게요.");
+            } else {
+                characterGuide.show(SoomgilCharacterView.Emotion.POOR,
+                        road == Road.PASSED
+                                ? "공사 구간은 지났지만 아직 공기가 안 좋아요. 내기순환 상태를 유지해야 해요."
+                                : "앗, 주변 공기가 좋지 않아요! 오염 구간에 접근 중이니 내기순환 상태를 확인할게요.");
+            }
+            return;
+        }
+        if (air == Air.UNKNOWN || road == Road.UNKNOWN) {
+            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                    "현재 대기질이나 위치를 확인할 수 없어요. 새로운 자동 전환은 보류할게요.");
+        } else if (road == Road.BEFORE) {
+            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                    "주행 경로와 주변 대기 상태를 확인하고 있어요.");
+        } else {
+            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
+                    "지금은 대기질이 안정적이에요. 편안하게 이동하세요!");
+        }
     }
 
     private String priorityReason() {
@@ -691,6 +748,7 @@ public final class MainActivity extends Activity {
         stopLocationTest();
         demoHandler.removeCallbacks(advanceDemo);
         apiClient.shutdown();
+        if (characterGuide != null) characterGuide.shutdown();
         if (pleosVehicleManager != null) pleosVehicleManager.release();
         super.onDestroy();
     }
