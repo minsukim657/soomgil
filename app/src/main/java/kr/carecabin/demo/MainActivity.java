@@ -1,6 +1,11 @@
 package kr.carecabin.demo;
 
 import android.app.Activity;
+import android.content.pm.PackageManager;
+
+import ai.pleos.playground.location.fused.FusedLocation;
+import ai.pleos.playground.location.fused.listener.FusedLocationListener;
+import ai.pleos.playground.location.fused.model.LocationData;
 import android.app.AlertDialog;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -33,9 +38,12 @@ public final class MainActivity extends Activity {
     private static final int TEXT = Color.rgb(24, 27, 31);
     private static final int MUTED = Color.rgb(105, 112, 120);
     private static final int AMBER = Color.rgb(205, 112, 20);
-    private static final String[] STAGES = {"출발", "공사 구간 진입 전", "공사 구간 통과 중", "구간 통과 후"};
     private static final long DEMO_STEP_DELAY_MS = 3000;
-    private static final long[] STEP_TIMES = {0, 10, 20, 30};
+    private static final double[] DEMO_POSITIONS_METERS = {0, 150, 250, 320};
+    private static final String DEMO_ROAD_ID = "demo-road";
+    private static final double DEMO_HEADING = 90;
+    private static final WorkZoneApproach WORK_ZONE = new WorkZoneApproach(100, 10, 30);
+
     private static final double DEMO_LATITUDE = 34.69806;
     private static final double DEMO_LONGITUDE = 126.69637;
     private static final String[] API_SAMPLES = {"공사 진행", "공사 종료", "조회 실패"};
@@ -51,6 +59,48 @@ public final class MainActivity extends Activity {
             new Scenario("공사 진행 · 대기 정보 확인 불가", Work.ACTIVE, Air.UNKNOWN, Air.NORMAL),
             new Scenario("공사 진행 · 접근 시 대기 보통", Work.ACTIVE, Air.NORMAL, Air.NORMAL),
             new Scenario("공사 진행 · 통과 후에도 대기 나쁨", Work.ACTIVE, Air.POOR, Air.POOR)
+    };
+
+    private static final String LOCATION_PERMISSION = "pleos.car.permission.FUSED_LOCATION";
+    private static final int LOCATION_REQUEST = 410;
+    private static final double GPS_DEMO_LATITUDE = 37.442;
+    private static final double GPS_DEMO_START_LONGITUDE = 127.134;
+    private static final double GPS_DEMO_END_LONGITUDE = 127.135;
+    private boolean gpsTrip;
+    private long gpsStartedAt;
+    private LocationData previousFix;
+    private Road gpsRoad = Road.UNKNOWN;
+    private FusedLocation locationSdk;
+    private TextView locationStatus;
+    private final FusedLocationListener locationListener = new FusedLocationListener() {
+        @Override
+        public void onChanged(LocationData location) {
+            runOnUiThread(() -> {
+                if (locationSdk == null) return;
+                if (location == null) {
+                    locationStatus.setText("차량 위치를 아직 받지 못했어요.");
+                    clearGpsPosition();
+                    return;
+                }
+                locationStatus.setText(String.format(java.util.Locale.KOREA,
+                        "위도 %.6f · 경도 %.6f\n진행 방향 %.1f° · 수신 시각 %tT",
+                        location.getLatitude(), location.getLongitude(),
+                        location.getHeading(), location.getTimestampMillis()));
+                acceptGpsPosition(location);
+                Log.d("SoomgilLocation", "Vehicle location update received");
+            });
+        }
+
+        @Override
+        public void onError(Exception error) {
+            runOnUiThread(() -> {
+                if (locationSdk != null) {
+                    locationStatus.setText("차량 위치를 받을 수 없어요.");
+                    clearGpsPosition();
+                }
+            });
+            Log.w("SoomgilLocation", "Vehicle location callback failed", error);
+        }
     };
 
     private PleosVehicleManager pleosVehicleManager;
@@ -283,6 +333,14 @@ public final class MainActivity extends Activity {
         LinearLayout card = panel(root);
         addText(card, "공사·주변 대기 관측", 18, TEXT, true);
         addText(card, "시연 좌표 · 34.69806, 126.69637", 14, MUTED, false);
+        addButton(card, "GPS 시연 시작", view -> {
+            if (checkSelfPermission(LOCATION_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{LOCATION_PERMISSION}, LOCATION_REQUEST);
+            } else {
+                startLocationTest();
+            }
+        });
+        locationStatus = addText(card, "", 15, MUTED, false);
         fetchEnvironment = addButton(card, "실제 API에서 조회", view -> fetchEnvironment());
         fetchEnvironment.setBackgroundTintList(ColorStateList.valueOf(ACCENT));
         fetchEnvironment.setTextColor(Color.WHITE);
@@ -295,6 +353,53 @@ public final class MainActivity extends Activity {
         card.addView(apiSample, new LinearLayout.LayoutParams(-1, dp(50)));
         addButton(card, "샘플로 주행 시작", view -> startSampleTrip(apiSample.getSelectedItemPosition()));
         environmentResult = addText(card, "실제 API 조회 또는 샘플을 선택해 주세요.", 15, MUTED, false);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != LOCATION_REQUEST) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            startLocationTest();
+        } else {
+            locationStatus.setText("차량 위치 권한이 필요해요.");
+        }
+    }
+
+    private void startLocationTest() {
+        if (locationSdk != null) {
+            startTrip(SCENARIOS[scenario.getSelectedItemPosition()], true);
+            return;
+        }
+        FusedLocation sdk = new FusedLocation(this);
+        if (!sdk.isSupported()) {
+            locationStatus.setText("이 기기에서는 Pleos 차량 위치 수신을 사용할 수 없어요.");
+            return;
+        }
+
+        locationStatus.setText("차량 위치를 기다리고 있어요.");
+        try {
+            sdk.initialize();
+            locationSdk = sdk;
+            sdk.registerFusedLocationCallback(locationListener);
+            startTrip(SCENARIOS[scenario.getSelectedItemPosition()], true);
+            sdk.getLastKnownLocation(locationListener);
+        } catch (RuntimeException error) {
+            stopLocationTest();
+            locationStatus.setText("차량 위치 수신을 시작하지 못했어요.");
+            Log.w("SoomgilLocation", "Could not start vehicle location receiver", error);
+        }
+    }
+
+    private void stopLocationTest() {
+        FusedLocation sdk = locationSdk;
+        if (sdk == null) return;
+        locationSdk = null;
+        try {
+            sdk.unregisterFusedLocationCallback(locationListener);
+        } finally {
+            sdk.release();
+        }
     }
 
     private void fetchEnvironment() {
@@ -333,7 +438,53 @@ public final class MainActivity extends Activity {
         startTrip(new Scenario(reading.workStatusLabel(), work, air, air));
     }
 
+    private void clearGpsPosition() {
+        previousFix = null;
+        gpsRoad = Road.UNKNOWN;
+        if (started && gpsTrip) update();
+    }
+
+    private void acceptGpsPosition(LocationData fix) {
+        if (!started || !gpsTrip) return;
+        if (!Double.isFinite(fix.getLatitude()) || !Double.isFinite(fix.getLongitude())) {
+            clearGpsPosition();
+            return;
+        }
+
+        elapsed = (android.os.SystemClock.elapsedRealtime() - gpsStartedAt) / 1000;
+        if (previousFix != null && fix.getTimestampMillis() <= previousFix.getTimestampMillis()) return;
+        // This eastbound fixture represents a single straight segment, with a 30 m corridor.
+        double crossTrackMeters = (fix.getLatitude() - GPS_DEMO_LATITUDE) * 111_195;
+        if (Math.abs(crossTrackMeters) > 30) {
+            clearGpsPosition();
+            return;
+        }
+        if (previousFix == null) {
+            previousFix = fix;
+            update();
+            return;
+        }
+        float[] movement = new float[2];
+        android.location.Location.distanceBetween(previousFix.getLatitude(), previousFix.getLongitude(),
+                fix.getLatitude(), fix.getLongitude(), movement);
+        if (movement[0] < 10) return;
+        previousFix = fix;
+
+        double metersPerDegree = 111_195 * Math.cos(Math.toRadians(GPS_DEMO_LATITUDE));
+        double distance = (fix.getLongitude() - GPS_DEMO_START_LONGITUDE) * metersPerDegree;
+        double end = (GPS_DEMO_END_LONGITUDE - GPS_DEMO_START_LONGITUDE) * metersPerDegree;
+        WorkZoneApproach.Position position = new WorkZoneApproach.Position(DEMO_ROAD_ID, distance, movement[1]);
+        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(DEMO_ROAD_ID, 0, end, DEMO_HEADING, trip.work());
+        gpsRoad = WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
+        Log.d("SoomgilLocation", "GPS demo heading=" + movement[1] + " road=" + gpsRoad);
+        update();
+    }
+
     private void startTrip(Scenario selected) {
+        startTrip(selected, false);
+    }
+
+    private void startTrip(Scenario selected, boolean useGps) {
         demoHandler.removeCallbacks(advanceDemo);
         started = false;
         history.clear();
@@ -352,6 +503,10 @@ public final class MainActivity extends Activity {
                 status.setText("차량 공조 상태를 확인할 수 없어 주행 제어를 보류해요.");
                 return;
             }
+            gpsTrip = useGps;
+            gpsStartedAt = android.os.SystemClock.elapsedRealtime();
+            previousFix = null;
+            gpsRoad = Road.UNKNOWN;
             trip = selected;
             policy = new VentilationPolicy();
             history.clear();
@@ -366,22 +521,27 @@ public final class MainActivity extends Activity {
                     ? "출발 전 차량 내기순환 ON 확인 · 앱은 이 상태를 기본값으로 존중"
                     : "출발 전 차량 내기순환 OFF 확인 · 앱이 전환한 경우 위험 해소 후 OFF 복원");
             update();
-            demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+            if (!gpsTrip) demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
         }));
     }
 
     private void advance() {
         stage++;
-        elapsed = STEP_TIMES[stage];
+        elapsed = stage * 10L;
         update();
-        if (stage < STEP_TIMES.length - 1) {
-            demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+        if (stage < DEMO_POSITIONS_METERS.length - 1) {
+            if (!gpsTrip) demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
         }
     }
 
     private void update() {
-        Air air = stage == 3 ? trip.afterAir() : trip.approachAir();
-        Decision decision = policy.update(new Observation(Road.values()[stage], trip.work(), air, elapsed,
+        WorkZoneApproach.Position position = new WorkZoneApproach.Position(
+                DEMO_ROAD_ID, DEMO_POSITIONS_METERS[stage], DEMO_HEADING);
+        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
+                DEMO_ROAD_ID, 200, 300, DEMO_HEADING, trip.work());
+        Road road = gpsTrip ? gpsRoad : WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
+        Air air = road == Road.PASSED ? trip.afterAir() : trip.approachAir();
+        Decision decision = policy.update(new Observation(road, trip.work(), air, elapsed,
                 enabled.isChecked(), driverIntervened, defrost), vehicleMode);
         switch (decision.action()) {
             case SWITCH, RESTORE -> {
@@ -409,7 +569,7 @@ public final class MainActivity extends Activity {
                                     } else {
                                         record("공조 변경 확인 실패 · " + detail);
                                     }
-                                    renderDashboard(trip.work(), air);
+                                    renderDashboard(road, trip.work(), air);
                                     log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
                                     updateButtons();
                                 }));
@@ -420,19 +580,19 @@ public final class MainActivity extends Activity {
         }
         recirculating = vehicleMode == Mode.RECIRCULATION;
 
-        renderDashboard(trip.work(), air);
+        renderDashboard(road, trip.work(), air);
         log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
         updateButtons();
     }
 
-    private void renderDashboard(Work work, Air air) {
+    private void renderDashboard(Road road, Work work, Air air) {
         mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
         mode.setTextColor(recirculating ? ACCENT : TEXT);
         if (defrost || driverIntervened) {
             status.setText(priorityReason());
         } else if (!enabled.isChecked()) {
             status.setText("자동 전환이 꺼져 있어요.");
-        } else if (stage == 3 && air == Air.POOR) {
+        } else if (road == Road.PASSED && air == Air.POOR) {
             status.setText(recirculating
                     ? "공사 구간은 지났지만 대기가 여전히 나빠 내기순환을 유지해요."
                     : "공사 구간은 지났지만 대기가 여전히 나빠요. 내기순환 전환 상태를 확인해 주세요.");
@@ -442,12 +602,12 @@ public final class MainActivity extends Activity {
         } else if (work == Work.UNKNOWN || air == Air.UNKNOWN) {
             status.setText(recirculating ? "환경 정보를 확인할 수 없어 새로운 전환 없이 현재 공조를 유지해요."
                     : "환경 정보를 확인할 수 없어 차량 기본 공조를 유지해요.");
-        } else if (stage == 3) {
+        } else if (road == Road.PASSED) {
             status.setText(recirculating
                     ? "공사 구간과 대기질 위험이 해소될 때까지 내기순환을 유지해요."
                     : "공사 구간을 지났고 대기질도 보통이라 기본 공조로 복원했어요.");
         } else if (recirculating) {
-            status.setText(stage == 1 ? "차량 내기순환 상태를 확인했어요. 실제 차량 상태를 유지해요."
+            status.setText(road == Road.APPROACH ? "차량 내기순환 상태를 확인했어요. 실제 차량 상태를 유지해요."
                     : "실제 차량 내기순환 상태를 유지하고 있어요.");
         } else if (air == Air.NORMAL) {
             status.setText("인근 초미세먼지가 ‘보통’이라 차량 기본 공조를 유지해요.");
@@ -464,7 +624,15 @@ public final class MainActivity extends Activity {
             case POOR -> "나쁨";
             case UNKNOWN -> "확인 불가";
         };
-        route.setText("주행 단계 · " + STAGES[stage]);
+        String roadLabel = switch (road) {
+            case BEFORE -> "출발";
+            case APPROACH -> "공사 구간 진입 전";
+            case WORK_ZONE -> "공사 구간 통과 중";
+            case PASSED -> "구간 통과 후";
+            case OPPOSITE -> "공사 구간 반대 방향";
+            case UNKNOWN -> "위치 확인 불가";
+        };
+        route.setText("주행 단계 · " + roadLabel);
         workValue.setText(workLabel);
         workValue.setTextColor(work == Work.ACTIVE ? AMBER : TEXT);
         airValue.setText(airLabel);
@@ -483,7 +651,7 @@ public final class MainActivity extends Activity {
     private void updateButtons() {
         manual.setEnabled(started && !driverIntervened && !defrost);
         demist.setEnabled(started && !defrost);
-        next.setEnabled(started && stage < STAGES.length - 1);
+        next.setEnabled(started && !gpsTrip && stage < DEMO_POSITIONS_METERS.length - 1);
     }
 
     @Override
@@ -503,6 +671,7 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopLocationTest();
         demoHandler.removeCallbacks(advanceDemo);
         apiClient.shutdown();
         if (pleosVehicleManager != null) pleosVehicleManager.release();

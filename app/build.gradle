@@ -45,4 +45,5 @@ android {
 // Pleos Vehicle SDK
 dependencies {
     implementation 'ai.pleos.playground:Vehicle:2.3.2'
+    implementation 'ai.pleos.playground:FusedLocation:1.1.3'
 }

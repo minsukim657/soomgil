@@ -15,7 +15,7 @@ public final class PleosVehicleManager {
     private static final String TAG = "SoomgilPleos";
     private Vehicle vehicle;
     private Object hvac;
-    private Object supportedArea;
+    private volatile Object supportedArea;
     private boolean initialized;
     private final Handler verificationHandler = new Handler(Looper.getMainLooper());
     private static final int VERIFY_MAX_ATTEMPTS = 5;
@@ -31,9 +31,17 @@ public final class PleosVehicleManager {
             vehicle.initialize();
             initialized = true;
             Log.i(TAG, "Vehicle SDK initialize() invoked.");
-            inspectHvacApiSurface();
+            discoverHvac(1);
         } catch (RuntimeException error) {
             Log.e(TAG, "Vehicle SDK initialization call failed.", error);
+        }
+    }
+
+    private void discoverHvac(int attempt) {
+        if (!initialized || supportedArea != null) return;
+        inspectHvacApiSurface();
+        if (attempt < 5) {
+            verificationHandler.postDelayed(() -> discoverHvac(attempt + 1), 2000);
         }
     }
 
