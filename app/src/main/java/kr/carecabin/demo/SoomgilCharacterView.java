@@ -7,7 +7,11 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.speech.tts.TextToSpeech;
+import ai.pleos.playground.tts.TextToSpeech;
+import ai.pleos.playground.tts.constant.ErrorType;
+import ai.pleos.playground.tts.constant.Mode;
+import ai.pleos.playground.tts.listener.EventListener;
+import ai.pleos.playground.tts.listener.OnInitializeListener;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -27,6 +31,22 @@ final class SoomgilCharacterView extends LinearLayout {
     private TextToSpeech tts;
     private boolean voiceEnabled = true;
     private boolean voiceReady;
+    private boolean released;
+    private String pendingSpeech;
+    private String lastSpokenText;
+    private long lastSpokenAt;
+    private static final long DUPLICATE_WINDOW_MS = 3000L;
+
+    private final EventListener speechEvents = new EventListener() {
+        @Override public void onReady() { }
+        @Override public void onStart() { android.util.Log.i("SoomgilVoice", "Speech playback started"); }
+        @Override public void onUpdatedRms(double rms) { }
+        @Override public void onDone() { android.util.Log.i("SoomgilVoice", "Speech playback completed"); }
+        @Override public void onStop() { android.util.Log.i("SoomgilVoice", "Speech playback stopped"); }
+        @Override public void onError(ErrorType errorType) {
+            android.util.Log.e("SoomgilVoice", "Speech playback error: " + errorType);
+        }
+    };
     private Emotion emotion;
     private String message = "";
     private long animateUntil;
@@ -102,8 +122,12 @@ final class SoomgilCharacterView extends LinearLayout {
         voiceButton.setOnClickListener(v -> {
             voiceEnabled = !voiceEnabled;
             updateVoiceButton();
-            if (!voiceEnabled && tts != null) tts.stop();
-            else if (voiceEnabled && voiceReady) speak(message);
+            if (!voiceEnabled) {
+                pendingSpeech = null;
+                if (tts != null) tts.stop();
+            } else {
+                speak(message);
+            }
         });
 
         // Demo preview works on an ordinary Android emulator without Pleos HVAC.
@@ -131,17 +155,28 @@ final class SoomgilCharacterView extends LinearLayout {
         }
 
         try {
-            tts = new TextToSpeech(context.getApplicationContext(), status -> {
-                if (status != TextToSpeech.SUCCESS || tts == null) return;
-                int languageResult = tts.setLanguage(Locale.KOREAN);
-                voiceReady = languageResult != TextToSpeech.LANG_MISSING_DATA
-                        && languageResult != TextToSpeech.LANG_NOT_SUPPORTED;
-                if (voiceReady) {
-                    tts.setSpeechRate(1.0f);
-                    if (voiceEnabled && !message.isEmpty()) speak(message);
+            tts = new TextToSpeech(context.getApplicationContext(), Mode.ON_DEVICE);
+            android.util.Log.i("SoomgilVoice", "Creating Pleos TTS in ON_DEVICE mode");
+            tts.initialize(new OnInitializeListener() {
+                @Override public void onSuccess() {
+                    if (released) return;
+                    tts.addEventListener(speechEvents);
+                    tts.setLocale(Locale.KOREA);
+                    voiceReady = true;
+                    android.util.Log.i("SoomgilVoice", "Pleos on-device TTS initialized; locale=ko-KR");
+                    if (voiceEnabled && pendingSpeech != null) {
+                        String queued = pendingSpeech;
+                        pendingSpeech = null;
+                        speak(queued);
+                    }
+                }
+
+                @Override public void onFailure(ErrorType errorType) {
+                    android.util.Log.e("SoomgilVoice", "Pleos TTS initialization failed: " + errorType);
                 }
             });
         } catch (RuntimeException unsupportedTts) {
+            android.util.Log.e("SoomgilVoice", "Pleos TTS initialization threw an exception", unsupportedTts);
             voiceReady = false;
         }
     }
@@ -164,12 +199,26 @@ final class SoomgilCharacterView extends LinearLayout {
                     Math.max(2600, nextMessage.length() * 145L));
             handler.postDelayed(animate, 320);
         }
-        if (voiceEnabled && voiceReady) speak(nextMessage);
+        if (voiceEnabled) speak(nextMessage);
     }
 
     private void speak(String words) {
-        if (tts == null || words.isEmpty()) return;
-        tts.speak(words, TextToSpeech.QUEUE_FLUSH, null, "soomgil-character-guide");
+        if (tts == null || released || words == null || words.trim().isEmpty()) return;
+        String text = words.trim();
+        if (!voiceReady) {
+            pendingSpeech = text; // Keep only the newest status message while the vehicle engine initializes.
+            return;
+        }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (text.equals(lastSpokenText) && now - lastSpokenAt < DUPLICATE_WINDOW_MS) return;
+        lastSpokenText = text;
+        lastSpokenAt = now;
+        try {
+            android.util.Log.i("SoomgilVoice", "Submitting character status speech");
+            tts.speak(text, true);
+        } catch (RuntimeException error) {
+            android.util.Log.e("SoomgilVoice", "Could not submit speech request", error);
+        }
     }
 
     private void updateVoiceButton() {
@@ -178,9 +227,15 @@ final class SoomgilCharacterView extends LinearLayout {
 
     void shutdown() {
         handler.removeCallbacks(animate);
+        released = true;
+        pendingSpeech = null;
         if (tts != null) {
-            tts.stop();
-            tts.shutdown();
+            try {
+                if (voiceReady) tts.removeEventListener(speechEvents);
+                tts.release();
+            } catch (RuntimeException error) {
+                android.util.Log.w("SoomgilVoice", "Could not release Pleos TTS", error);
+            }
             tts = null;
         }
     }
