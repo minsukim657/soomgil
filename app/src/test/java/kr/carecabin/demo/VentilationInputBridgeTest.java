@@ -55,8 +55,8 @@ public final class VentilationInputBridgeTest {
     private static void directionAndMissingEvidence() {
         EnvironmentReading live = reading(EnvironmentReading.WorkStatus.IN_PROGRESS, "3", "2026-11-13 15:00");
         check(observe(live, route(50, 180)).road() == Road.OPPOSITE, "Opposite direction recognized");
-        check(new VentilationPolicy().update(observe(live, route(50, 180)), Mode.AUTOMATIC).action()
-                == Action.KEEP, "Opposite direction never switches");
+        check(new VentilationPolicy().update(observe(live, route(50, 180)), Mode.AUTOMATIC).reason()
+                == Reason.POOR_AIR, "Opposite direction excludes construction but poor air still applies");
         check(observe(live, route(211, 0)).road() == Road.PASSED, "Passed recognized");
         check(observe(live, null).road() == Road.UNKNOWN, "No location match is unknown");
         VentilationInputBridge.RouteEvidence wrong = new VentilationInputBridge.RouteEvidence(
@@ -64,8 +64,8 @@ public final class VentilationInputBridgeTest {
         check(observe(live, wrong).road() == Road.UNKNOWN, "Wrong construction identity rejected");
         check(observe(EnvironmentReading.failure("offline"), route(50, 0)).work() == Work.UNKNOWN,
                 "Failed API is unknown");
-        check(new VentilationPolicy().update(observe(live, null), Mode.AUTOMATIC).action()
-                == Action.KEEP, "Unmatched location never starts a command");
+        check(new VentilationPolicy().update(observe(live, null), Mode.AUTOMATIC).reason()
+                == Reason.POOR_AIR, "Poor air applies without matched location");
     }
 
     private static void pm25AndFreshness() {
@@ -103,7 +103,7 @@ public final class VentilationInputBridgeTest {
                 "Defrost has priority");
         VentilationPolicy another = new VentilationPolicy();
         Observation driver = BRIDGE.observe(live, route(50, 0), 10, true, true, false);
-        check(another.update(driver, Mode.AUTOMATIC).action() == Action.KEEP,
-                "Driver has priority");
+        check(another.update(driver, Mode.AUTOMATIC).action() == Action.SWITCH,
+                "Confirmed risk still applies while automatic control is enabled");
     }
 }

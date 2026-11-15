@@ -57,7 +57,7 @@ public final class MainActivity extends Activity {
     private static final Scenario[] SCENARIOS = {
             new Scenario("공사 진행 · 접근 시 대기 나쁨", Work.ACTIVE, Air.POOR, Air.NORMAL),
             new Scenario("공사 진행 · 대기 매우 나쁨", Work.ACTIVE, Air.POOR, Air.NORMAL),
-            new Scenario("공사 종료 · 같은 도로와 대기 등급", Work.ENDED, Air.POOR, Air.NORMAL),
+            new Scenario("공사 종료 · 대기 나쁨", Work.ENDED, Air.POOR, Air.NORMAL),
             new Scenario("공사 정보 확인 불가", Work.UNKNOWN, Air.POOR, Air.NORMAL),
             new Scenario("공사 진행 · 대기 정보 확인 불가", Work.ACTIVE, Air.UNKNOWN, Air.NORMAL),
             new Scenario("공사 진행 · 접근 시 대기 보통", Work.ACTIVE, Air.NORMAL, Air.NORMAL),
@@ -69,7 +69,10 @@ public final class MainActivity extends Activity {
     private static final SeobuDemoRoute GPS_DEMO_ROUTE = new SeobuDemoRoute();
     private boolean gpsTrip;
     private long gpsStartedAt;
+    private static final long GPS_FIX_TIMEOUT_MS = 15_000;
     private LocationData previousFix;
+    private long lastFixTimestamp;
+    private final Runnable expireGpsFix = this::onGpsFixExpired;
     private WorkZoneApproach.Position gpsPosition;
     private Road gpsRoad = Road.UNKNOWN;
     private VentilationInputBridge.RouteEvidence gpsRouteEvidence;
@@ -87,6 +90,12 @@ public final class MainActivity extends Activity {
                     clearGpsPosition();
                     return;
                 }
+                long timestamp = location.getTimestampMillis();
+                long age = Math.max(0L, System.currentTimeMillis() - timestamp);
+                if (timestamp <= lastFixTimestamp || age >= GPS_FIX_TIMEOUT_MS) return;
+                lastFixTimestamp = timestamp;
+                demoHandler.removeCallbacks(expireGpsFix);
+                demoHandler.postDelayed(expireGpsFix, GPS_FIX_TIMEOUT_MS - age);
                 locationStatus.setText(String.format(java.util.Locale.KOREA,
                         "위도 %.6f · 경도 %.6f\n진행 방향 %.1f° · 수신 시각 %tT",
                         location.getLatitude(), location.getLongitude(),
@@ -118,7 +127,6 @@ public final class MainActivity extends Activity {
     private boolean started;
     private boolean recirculating;
     private Mode vehicleMode = Mode.AUTOMATIC;
-    private boolean driverIntervened;
     private boolean defrost;
     private float uiScale = 1f;
 
@@ -136,6 +144,7 @@ public final class MainActivity extends Activity {
     private static final long VEHICLE_STATE_POLL_MS = 1500;
     private boolean statePollInFlight;
     private boolean appControlInFlight;
+    private long controlGeneration;
     private boolean activityResumed;
     private final Runnable pollVehicleState = this::pollActualVehicleState;
     private final Runnable refreshLiveEnvironment = this::refreshLiveEnvironment;
@@ -289,11 +298,8 @@ public final class MainActivity extends Activity {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         settings.addView(controls);
-        manual = addButton(controls, "운전자 공조 조작", view -> {
-            driverIntervened = true;
-            vehicleMode = Mode.AUTOMATIC; // Simulated driver action, not a policy command.
-            update();
-        });
+        manual = addButton(controls, "운전자 공조 조작", view ->
+                runHvacTest(vehicleMode != Mode.RECIRCULATION));
         demist = addButton(controls, "앞유리 김 서림 제거", view -> {
             defrost = true;
             vehicleMode = Mode.FRESH_AIR; // Simulated defrost priority.
@@ -340,11 +346,12 @@ public final class MainActivity extends Activity {
             return;
         }
         statePollInFlight = true;
+        long pollGeneration = controlGeneration;
         pleosVehicleManager.getRecirculationState((success, actual, detail) -> runOnUiThread(() -> {
             statePollInFlight = false;
             if (isFinishing() || isDestroyed()) return;
             // A poll that began before an app command must not overwrite the command's newer result.
-            if (appControlInFlight) {
+            if (appControlInFlight || pollGeneration != controlGeneration) {
                 if (activityResumed) demoHandler.postDelayed(pollVehicleState, VEHICLE_STATE_POLL_MS);
                 return;
             }
@@ -354,7 +361,6 @@ public final class MainActivity extends Activity {
                 vehicleMode = liveMode;
                 recirculating = actual;
                 if (changed) {
-                    if (started && !appControlInFlight) driverIntervened = true;
                     record("차량 공조 상태 변경 감지 · " + (actual ? "내기순환 중" : "기본 공조 중"));
                     if (started && policy != null) {
                         // Feed the live state into the policy so manual driver changes take priority.
@@ -400,10 +406,8 @@ public final class MainActivity extends Activity {
             return;
         }
         appControlInFlight = true;
-        if (started) {
-            driverIntervened = true;
-            update();
-        }
+        controlGeneration++;
+
         showClimateFeedback("공조 테스트 요청 중…", false);
         pleosVehicleManager.setRecirculation(requestedState,
                 (requested, verified, actual, detail) -> runOnUiThread(() -> {
@@ -413,6 +417,12 @@ public final class MainActivity extends Activity {
                             ? "공조 테스트 완료 · 내기순환 " + (requested ? "ON" : "OFF") + " 확인"
                             : "공조 테스트 실패 · " + detail;
                     showClimateFeedback(result, !verified);
+                    if (verified && actual != null) {
+                        vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
+                        recirculating = actual;
+                        if (started && policy != null) update();
+                        else renderLiveVehicleMode();
+                    }
                 }));
     }
 
@@ -486,20 +496,9 @@ public final class MainActivity extends Activity {
     }
 
     private void startGpsTrip(EnvironmentReading reading) {
-        if (reading == null || reading.hasFailed()
-                || !Double.isFinite(reading.workLatitude) || !Double.isFinite(reading.workLongitude)) {
-            locationStatus.setText("경로와 일치하는 공사 정보를 확인할 수 없어 자동화를 시작하지 않았어요.");
-            return;
-        }
         Observation fresh = liveEnvironment.observe(reading, null, 0, enabled.isChecked(), false, false);
-        if (fresh.work() == Work.UNKNOWN || fresh.air() == Air.UNKNOWN) {
-            locationStatus.setText("공사 상태 또는 최신 대기 정보를 확인할 수 없어 자동화를 시작하지 않았어요.");
-            return;
-        }
-        SeobuDemoRoute.Match event = GPS_DEMO_ROUTE.match(reading.workLatitude, reading.workLongitude);
-        if (event.offsetMeters() > 30 || event.distanceMeters() < GPS_DEMO_ROUTE.startMeters()
-                || event.distanceMeters() > GPS_DEMO_ROUTE.endMeters()) {
-            locationStatus.setText("공사 위치가 GPS 시연 구간과 일치하지 않아 자동화를 시작하지 않았어요.");
+        if (fresh.work() == Work.UNKNOWN && fresh.air() == Air.UNKNOWN) {
+            locationStatus.setText("공사와 최신 대기 정보를 모두 확인할 수 없어 자동화를 시작하지 않았어요.");
             return;
         }
 
@@ -526,6 +525,8 @@ public final class MainActivity extends Activity {
     }
 
     private void stopLocationTest() {
+        demoHandler.removeCallbacks(expireGpsFix);
+        lastFixTimestamp = 0;
         FusedLocation sdk = locationSdk;
         if (sdk == null) return;
         locationSdk = null;
@@ -589,15 +590,12 @@ public final class MainActivity extends Activity {
         // Live route matching must provide evidence for the same ITS work zone.
         Observation input = liveEnvironment.observe(reading, null, 0,
                 enabled.isChecked(), false, false);
-        Decision decision = new VentilationPolicy().update(input, vehicleMode);
         String air = switch (input.air()) {
             case NORMAL -> "좋음/보통";
             case POOR -> "나쁨 이상";
             case UNKNOWN -> "확인 불가";
         };
-        String control = decision.action() == Action.KEEP
-                ? "공조 유지 · 공사 구간과 차량 경로 일치 확인 필요"
-                : "공조 제어 조건 충족 · 시연 판단";
+        String control = "자동 공조를 적용하려면 주행을 시작해 주세요.";
         String locationMatch = "";
         if (Double.isFinite(reading.workLatitude) && Double.isFinite(reading.workLongitude)) {
             SeobuDemoRoute.Match match = GPS_DEMO_ROUTE.match(reading.workLatitude, reading.workLongitude);
@@ -617,10 +615,10 @@ public final class MainActivity extends Activity {
             String grade = reading.pm25Grade;
             if ("4".equals(grade)) {
                 characterGuide.show(SoomgilCharacterView.Emotion.SEVERE,
-                        "주변 초미세먼지가 매우 나쁨이에요! 실제 경로와 공사 구간의 일치를 확인해야 해요.");
+                        "주변 초미세먼지가 매우 나쁨이에요. 자동 공조 주행을 시작하면 내기순환을 요청해요.");
             } else if ("3".equals(grade)) {
                 characterGuide.show(SoomgilCharacterView.Emotion.POOR,
-                        "주변 초미세먼지가 나쁨이에요. 안전한 공조 판단을 위해 주행 경로를 확인할게요.");
+                        "주변 초미세먼지가 나쁨이에요. 자동 공조 주행을 시작하면 내기순환을 요청해요.");
             } else if ("1".equals(grade) || "2".equals(grade)) {
                 characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
                         "조회한 주변 대기질은 양호해요. 주행 경로도 함께 확인할게요.");
@@ -650,6 +648,11 @@ public final class MainActivity extends Activity {
             default -> Air.UNKNOWN;
         };
         startTrip(new Scenario(reading.workStatusLabel(), work, air, air));
+    }
+
+    private void onGpsFixExpired() {
+        locationStatus.setText("최근 차량 위치를 받지 못했어요.");
+        clearGpsPosition();
     }
 
     private void clearGpsPosition() {
@@ -692,7 +695,7 @@ public final class MainActivity extends Activity {
         gpsPosition = position;
         gpsRouteEvidence = routeEvidenceFor(position);
         Observation live = liveEnvironment.observe(liveReading, gpsRouteEvidence, elapsed,
-                enabled.isChecked(), driverIntervened, defrost);
+                enabled.isChecked(), false, defrost);
         gpsRoad = live.road();
         Log.d("SoomgilLocation", "GPS demo heading=" + movement[1] + " road=" + gpsRoad);
         update();
@@ -750,6 +753,11 @@ public final class MainActivity extends Activity {
             gpsTrip = useGps;
             gpsStartedAt = android.os.SystemClock.elapsedRealtime();
             previousFix = null;
+            lastFixTimestamp = 0;
+            if (gpsTrip) {
+                demoHandler.removeCallbacks(expireGpsFix);
+                demoHandler.postDelayed(expireGpsFix, GPS_FIX_TIMEOUT_MS);
+            }
             gpsPosition = null;
             gpsRoad = Road.UNKNOWN;
             gpsRouteEvidence = null;
@@ -762,7 +770,6 @@ public final class MainActivity extends Activity {
             started = true;
             recirculating = actual;
             vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
-            driverIntervened = false;
             defrost = false;
             record(actual
                     ? "출발 전 차량 내기순환 ON 확인 · 앱은 이 상태를 기본값으로 존중"
@@ -794,7 +801,7 @@ public final class MainActivity extends Activity {
         Observation input;
         if (gpsTrip) {
             input = liveEnvironment.observe(liveReading, gpsRouteEvidence, elapsed,
-                    enabled.isChecked(), driverIntervened, defrost);
+                    enabled.isChecked(), false, defrost);
             road = input.road();
             work = input.work();
             air = input.air();
@@ -807,10 +814,10 @@ public final class MainActivity extends Activity {
             air = road == Road.PASSED ? trip.afterAir() : trip.approachAir();
             work = trip.work();
             input = new Observation(road, work, air, elapsed,
-                    enabled.isChecked(), driverIntervened, defrost);
+                    enabled.isChecked(), false, defrost);
         }
-        Decision decision = policy.update(input, vehicleMode);
-        switch (decision.action()) {
+        Decision decision = appControlInFlight ? null : policy.update(input, vehicleMode);
+        if (decision != null) switch (decision.action()) {
             case SWITCH, RESTORE -> {
                 if (policy.isPending(decision.requestId())) {
                     final long requestId = decision.requestId();
@@ -824,6 +831,7 @@ public final class MainActivity extends Activity {
                     } else {
                         final VentilationPolicy requestPolicy = policy;
                         appControlInFlight = true;
+                        controlGeneration++;
                         showClimateFeedback("차량 공조 변경 확인 중…", false);
                         pleosVehicleManager.setRecirculation(requestedRecirculation,
                                 (requested, verified, actual, detail) -> runOnUiThread(() -> {
@@ -839,11 +847,15 @@ public final class MainActivity extends Activity {
                                         vehicleMode = actual ? Mode.RECIRCULATION : Mode.AUTOMATIC;
                                         recirculating = actual;
                                         record(requestedAction == Action.SWITCH
-                                                ? "대기질 나쁨 감지 · 실제 차량 내기순환 ON 확인"
+                                                ? (decision.reason() == Reason.CONSTRUCTION ? "공사 구간 접근·통과" : "초미세먼지 나쁨") + " · 내기순환 ON 확인"
                                                 : "공사 구간 통과/자동화 종료 · 실제 차량 공조 상태 복원 확인");
                                     } else {
                                         record("공조 변경 확인 실패 · " + detail);
                                         showClimateFeedback("공조 변경 확인 실패 · " + detail, true);
+                                    }
+                                    if (verified) {
+                                        update();
+                                        return;
                                     }
                                     renderDashboard(road, work, air);
                                     log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
@@ -864,31 +876,12 @@ public final class MainActivity extends Activity {
     private void renderDashboard(Road road, Work work, Air air) {
         mode.setText(recirculating ? "내기순환 중" : "기본 공조 중");
         mode.setTextColor(recirculating ? ACCENT : TEXT);
-        if (defrost || driverIntervened) {
+        if (defrost) {
             status.setText(priorityReason());
         } else if (!enabled.isChecked()) {
             status.setText("자동 전환이 꺼져 있어요.");
-        } else if (road == Road.PASSED && air == Air.POOR) {
-            status.setText(recirculating
-                    ? "공사 구간은 지났지만 대기가 여전히 나빠 내기순환을 유지해요."
-                    : "공사 구간은 지났지만 대기가 여전히 나빠요. 내기순환 전환 상태를 확인해 주세요.");
-        } else if (work == Work.ENDED) {
-            status.setText(recirculating ? "공사 종료 정보가 확인됐어요. 대기질 위험 해소 여부를 확인해요."
-                    : "공사 종료 정보가 확인됐어요. 차량 기본 공조를 유지해요.");
-        } else if (work == Work.UNKNOWN || air == Air.UNKNOWN) {
-            status.setText(recirculating ? "환경 정보를 확인할 수 없어 새로운 전환 없이 현재 공조를 유지해요."
-                    : "환경 정보를 확인할 수 없어 차량 기본 공조를 유지해요.");
-        } else if (road == Road.PASSED) {
-            status.setText(recirculating
-                    ? "공사 구간과 대기질 위험이 해소될 때까지 내기순환을 유지해요."
-                    : "공사 구간을 지났고 대기질도 보통이라 기본 공조로 복원했어요.");
-        } else if (recirculating) {
-            status.setText(road == Road.APPROACH ? "차량 내기순환 상태를 확인했어요. 실제 차량 상태를 유지해요."
-                    : "실제 차량 내기순환 상태를 유지하고 있어요.");
-        } else if (air == Air.NORMAL) {
-            status.setText("인근 초미세먼지가 ‘보통’이라 차량 기본 공조를 유지해요.");
         } else {
-            status.setText("등록 경로에서 공사 구간에 접근하고 있어요.");
+            status.setText(climateReason(road, work, air));
         }
         String workLabel = switch (work) {
             case ACTIVE -> "진행";
@@ -913,41 +906,30 @@ public final class MainActivity extends Activity {
         workValue.setTextColor(work == Work.ACTIVE ? AMBER : TEXT);
         airValue.setText(airLabel);
         airValue.setTextColor(air == Air.POOR ? AMBER : TEXT);
-        updateCharacter(road, air);
+        if (characterGuide != null) {
+            SoomgilCharacterView.Emotion emotion = air == Air.POOR
+                    ? SoomgilCharacterView.Emotion.POOR
+                    : road == Road.PASSED ? SoomgilCharacterView.Emotion.CLEARED
+                    : SoomgilCharacterView.Emotion.TALKING;
+            characterGuide.show(emotion, status.getText().toString());
+        }
     }
 
-    private void updateCharacter(Road road, Air air) {
-        if (characterGuide == null) return;
-        if (road == Road.PASSED && air == Air.NORMAL) {
-            characterGuide.show(SoomgilCharacterView.Emotion.CLEARED,
-                    "오염 구간을 지났어요! 주변 대기질도 안정됐으니 공조 상태를 확인해볼게요.");
-            return;
+    private String climateReason(Road road, Work work, Air air) {
+        if (VentilationPolicy.constructionRisk(road, work)) {
+            return recirculating ? "공사 구간이라 내기순환 중이에요."
+                    : "공사 구간이라 대기질 등급과 관계없이 내기순환을 요청해요.";
         }
         if (air == Air.POOR) {
-            boolean severe = trip != null && trip.title().contains("매우 나쁨");
-            if (severe) {
-                characterGuide.show(SoomgilCharacterView.Emotion.SEVERE,
-                        "주의해 주세요! 현재 대기 오염이 매우 심해요. 오염 위험이 해소될 때까지 공조 상태를 유지할게요.");
-            } else {
-                characterGuide.show(SoomgilCharacterView.Emotion.POOR,
-                        road == Road.PASSED
-                                ? "공사 구간은 지났지만 아직 공기가 안 좋아요. 내기순환 상태를 유지해야 해요."
-                                : "앗, 주변 공기가 좋지 않아요! 오염 구간에 접근 중이니 내기순환 상태를 확인할게요.");
-            }
-            return;
+            return recirculating ? "초미세먼지가 나쁨 이상이라 내기순환 중이에요."
+                    : "초미세먼지가 나쁨 이상이라 내기순환을 요청해요.";
         }
-        if (air == Air.UNKNOWN || road == Road.UNKNOWN) {
-            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
-                    "현재 대기질이나 위치를 확인할 수 없어요. 새로운 자동 전환은 보류할게요.");
-        } else if (road == Road.BEFORE) {
-            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
-                    "주행 경로와 주변 대기 상태를 확인하고 있어요.");
-        } else {
-            characterGuide.show(SoomgilCharacterView.Emotion.TALKING,
-                    "지금은 대기질이 안정적이에요. 편안하게 이동하세요!");
+        if (VentilationPolicy.informationUnavailable(road, work, air)) {
+            return "공사 또는 대기 정보를 확인하지 못했어요. 현재 공조 상태를 유지해요.";
         }
+        return recirculating ? "공사와 대기질 조건이 해소됐어요. 현재 내기순환 중이에요."
+                : "공사와 대기질 조건이 해소됐어요. 현재 외기순환 중이에요.";
     }
-
     private String priorityReason() {
         if (defrost) return "앞유리 김 서림 제거를 우선해요.";
         return "운전자의 공조 조작을 우선해요.";
@@ -958,7 +940,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateButtons() {
-        manual.setEnabled(started && !driverIntervened && !defrost);
+        manual.setEnabled(started && !appControlInFlight && !defrost);
         demist.setEnabled(started && !defrost);
         next.setEnabled(started && !gpsTrip && stage < DEMO_POSITIONS_METERS.length - 1);
     }

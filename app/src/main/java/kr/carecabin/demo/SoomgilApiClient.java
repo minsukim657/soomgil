@@ -60,18 +60,29 @@ final class SoomgilApiClient {
     }
 
     private EnvironmentReading load(double latitude, double longitude) throws Exception {
-        requireKey(BuildConfig.ITS_API_KEY, "ITS_API_KEY");
-        requireKey(BuildConfig.AIRKOREA_API_KEY, "AIRKOREA_API_KEY");
-
-        JSONObject roadwork = findNearestRoadwork(latitude, longitude);
-        double workLatitude = number(roadwork.optString("coordY"));
-        double workLongitude = number(roadwork.optString("coordX"));
-        JSONObject station = findNearestStation(workLatitude, workLongitude);
-        String stationName = station.optString("stationName", "").trim();
-        if (stationName.isEmpty()) throw new IOException("주변 측정소를 찾지 못했습니다.");
-
-        JSONObject measurement = fetchLatestMeasurement(stationName);
-        return toReading(roadwork, station, measurement);
+        JSONObject roadwork = new JSONObject();
+        JSONObject station = new JSONObject();
+        JSONObject measurement = new JSONObject();
+        String workError = null;
+        try {
+            requireKey(BuildConfig.ITS_API_KEY, "ITS_API_KEY");
+            roadwork = findNearestRoadwork(latitude, longitude);
+        } catch (Exception error) {
+            workError = safeMessage(error);
+        }
+        try {
+            requireKey(BuildConfig.AIRKOREA_API_KEY, "AIRKOREA_API_KEY");
+            station = findNearestStation(latitude, longitude);
+            String stationName = station.optString("stationName", "").trim();
+            if (stationName.isEmpty()) throw new IOException("주변 측정소를 찾지 못했습니다.");
+            measurement = fetchLatestMeasurement(stationName);
+        } catch (Exception error) {
+            if (workError != null) {
+                return EnvironmentReading.failure("공사 정보: " + workError
+                        + "\n대기 정보: " + safeMessage(error));
+            }
+        }
+        return toReading(roadwork, station, measurement, latitude, longitude);
     }
 
     private JSONObject findNearestRoadwork(double latitude, double longitude) throws Exception {
@@ -185,7 +196,8 @@ final class SoomgilApiClient {
         return result;
     }
 
-    private EnvironmentReading toReading(JSONObject work, JSONObject station, JSONObject measurement) {
+    private EnvironmentReading toReading(JSONObject work, JSONObject station, JSONObject measurement,
+                                         double latitude, double longitude) {
         String start = displayDate(work.optString("startDate", ""));
         String end = displayDate(work.optString("endDate", ""));
         LocalDateTime now = LocalDateTime.now(KOREA);
@@ -214,7 +226,7 @@ final class SoomgilApiClient {
         String gradeLabel = gradeLabel(rawGrade);
         double stationDistance = distanceKm(
                 number(station.optString("dmX")), number(station.optString("dmY")),
-                number(work.optString("coordY")), number(work.optString("coordX")));
+                latitude, longitude);
         return new EnvironmentReading(status, roadName, segment, direction, validFrom, validUntil,
                 station.optString("stationName", "측정소 미제공"), rawGrade, gradeLabel,
                 firstNonBlank(measurement.optString("dataTime", ""), "관측 시각 미제공"),
