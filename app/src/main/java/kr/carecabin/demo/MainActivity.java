@@ -102,6 +102,7 @@ public final class MainActivity extends Activity {
     };
 
     private PleosVehicleManager pleosVehicleManager;
+    private SoomgilVoiceGuide voiceGuide;
     private VentilationPolicy policy;
     private final ArrayDeque<String> history = new ArrayDeque<>();
     private final SoomgilApiClient apiClient = new SoomgilApiClient();
@@ -146,6 +147,7 @@ public final class MainActivity extends Activity {
         // prove Vehicle Service connectivity or HVAC availability.
         pleosVehicleManager = new PleosVehicleManager(this);
         pleosVehicleManager.initialize();
+        voiceGuide = new SoomgilVoiceGuide(this);
         boolean wide = getResources().getConfiguration().screenWidthDp >= 600;
         uiScale = wide ? 1.45f : 1f;
         getWindow().setStatusBarColor(BACKGROUND);
@@ -231,11 +233,13 @@ public final class MainActivity extends Activity {
         settings.addView(controls);
         manual = addButton(controls, "운전자 공조 조작", view -> {
             driverIntervened = true;
+            if (voiceGuide != null) voiceGuide.speak("운전자님의 공조 조작을 우선할게요.");
             vehicleMode = Mode.AUTOMATIC; // Simulated driver action, not a policy command.
             update();
         });
         demist = addButton(controls, "앞유리 김 서림 제거", view -> {
             defrost = true;
+            if (voiceGuide != null) voiceGuide.speak("앞유리 김 서림 제거를 우선할게요.");
             vehicleMode = Mode.FRESH_AIR; // Simulated defrost priority.
             update();
         });
@@ -244,6 +248,9 @@ public final class MainActivity extends Activity {
                 confirmHvacTest(true));
         Button hvacOffTest = addButton(settings, "실차 내기순환 OFF 테스트", view ->
                 confirmHvacTest(false));
+        addButton(settings, "캐릭터 음성 안내 테스트", view -> {
+            if (voiceGuide != null) voiceGuide.speak("안녕하세요! 저는 숨길이에요. 쾌적한 주행을 도와드릴게요.");
+        });
 
         if (wide) {
             columns.post(() -> {
@@ -537,6 +544,7 @@ public final class MainActivity extends Activity {
             record(actual
                     ? "출발 전 차량 내기순환 ON 확인 · 앱은 이 상태를 기본값으로 존중"
                     : "출발 전 차량 내기순환 OFF 확인 · 앱이 전환한 경우 위험 해소 후 OFF 복원");
+            if (voiceGuide != null) voiceGuide.speak("안녕하세요! 저는 숨길이에요. 주행 중 주변 공기 상태를 살펴볼게요.");
             update();
             if (!gpsTrip) demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
         }));
@@ -583,6 +591,11 @@ public final class MainActivity extends Activity {
                                         record(requestedAction == Action.SWITCH
                                                 ? "대기질 나쁨 감지 · 실제 차량 내기순환 ON 확인"
                                                 : "공사 구간 통과/자동화 종료 · 실제 차량 공조 상태 복원 확인");
+                                        if (voiceGuide != null) {
+                                            voiceGuide.speak(requestedAction == Action.SWITCH
+                                                    ? "주변 미세먼지 농도가 높아요. 내기순환으로 전환했어요."
+                                                    : "공사 구간을 통과했고 공기 상태가 좋아져 기본 공조로 돌아왔어요.");
+                                        }
                                     } else {
                                         record("공조 변경 확인 실패 · " + detail);
                                     }
@@ -692,6 +705,7 @@ public final class MainActivity extends Activity {
         demoHandler.removeCallbacks(advanceDemo);
         apiClient.shutdown();
         if (pleosVehicleManager != null) pleosVehicleManager.release();
+        if (voiceGuide != null) voiceGuide.release();
         super.onDestroy();
     }
 
