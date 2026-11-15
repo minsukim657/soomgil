@@ -17,6 +17,16 @@
 - 실제 공사·대기 조회는 `진행/종료/확인 불가`와 `보통/나쁨/확인 불가`로 정규화합니다. 조회 실패, 2시간보다 오래된 관측, 구간 일치 여부가 불확실한 경우는 자동 제어 근거로 사용하지 않습니다. 대상 도로·좌표·방향과 실제 차량 진행 방향이 일치할 때만 `APPROACH`를 전달합니다.
 - Pleos의 실제 내기순환 Boolean을 화면에 표시합니다. 운전자 직접 조작이 감지되면 해당 주행에서 자동 제어권을 포기하며 운전자 설정을 되돌리지 않습니다. SDK에서 전체 HVAC 프로필을 읽는 것은 아니므로 `기본 공조`는 내기순환 OFF 상태를 뜻합니다.
 
+## 제출 시연에서 보여주는 동작
+
+숨길은 **서부간선도로 신정교~목동교 방면**의 등록 경로에서 공사와 대기질을 확인해 내기순환을 자동으로 조절하는 시제품입니다.
+
+- **실제 데이터 연동 시연**에서는 ITS 공사 정보와 인근 에어코리아 측정소의 초미세먼지 등급을 실시간으로 조회합니다. Pleos 에뮬레이터에서 GPS 경로를 재생하면 앱이 공사 구간의 접근·통과를 판단합니다. 공사 중이고 대기질이 나쁘면 접근 단계에서 내기순환을 켜고, 통과 후에도 대기가 나쁘면 유지합니다.
+- **샘플 주행**에서는 공사 구간을 통과한 뒤 대기질이 보통으로 회복되는 상황을 재현합니다. 앱이 켰던 내기순환이 출발 전 OFF 상태로 돌아오는 과정을 실제 API의 관측 시점과 무관하게 보여줍니다.
+
+이번 시연은 **공사 구간에 들어가기 전에 공조가 작동하는지** 확인하는 데 초점을 맞췄습니다. 경로를 미리 등록해 두면 GPS 위치를 해당 경로와 바로 대조할 수 있어 별도 길찾기 API나 API 키가 필요하지 않습니다. 목적지를 자유롭게 설정하고 그때마다 새 경로의 공사 구간을 판단하는 기능으로 확장하려면 주행 경로 좌표를 제공하는 길찾기 연동이 필요합니다.
+
+
 ## 서부간선도로 GPS 시연
 
 1. Android Studio에서 Pleos Connect 에뮬레이터를 선택해 `app`을 실행합니다. Virtual Console을 열어 둔 상태에서 **Climate**의 내기순환을 끄고, 숨길에서 **기본 공조 중**이 표시되는지 확인합니다.
@@ -31,7 +41,7 @@
 1. Android Studio의 **Tools → SDK Manager → SDK Update Sites**에서 [Pleos 전용 시스템 이미지](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/setup-connect-sdk-emulator)를 추가합니다. Windows용 주소는 `https://nexus-playground.pleos.ai/repository/raw-releases/connect-avd/2.x/crp-sys-img.xml`입니다. **API 34 / Pleos Connect v2.1.0 / Cold boot / RAM 4 GB**로 기기를 생성합니다. [에뮬레이터 설정](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/configure-pleos-connect-emulator)
 2. 기기를 부팅하고 `adb forward tcp:8088 tcp:8088`을 실행한 뒤 브라우저에서 `http://127.0.0.1:8088/`의 **Climate**를 엽니다. [Virtual Console](https://document.pleos.ai/docs/connect/guide/getting-started/application-development/use-vehicle-emulator)
 3. Pleos Playground의 프로젝트 SDK 화면에서 Vehicle Control과 FusedLocation 사용 상태를 확인합니다. 공개 안내는 둘을 **준비 중**으로 표시합니다. [공식 Vehicle 샘플](https://document.pleos.ai/docs/pleos-only/tutorial/vehicle-sdk-sample-app)의 HVAC 화면에서 지원 여부와 권한을 확인하고, 공조 상태 조회 → 내기순환 변경 요청 → 실제 상태 콜백까지 확인합니다. Pleos 에뮬레이터에서 GPS 시연의 내기순환 전환과 복원을 확인했습니다. [SDK 사용 상태 안내](https://document.pleos.ai/docs/pleos-only/create-my-project) · [HVAC API](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/Vehicle/vehicle/ai.pleos.playground.vehicle.api/h-v-a-c/entry)
-4. [FusedLocation](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/FusedLocation/intro)의 위치와 진행 방향을 등록 경로에 대조합니다. 실제 내비 경로 전체와의 연동은 [NaviHelper](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/NaviHelper/intro)가 제공하는 경로 데이터를 검증한 뒤 확장합니다.
+4. [FusedLocation](https://document.pleos.ai/docs/pleos-only/connect-sdk-pleos/FusedLocation/intro)의 위치와 진행 방향을 등록 경로에 대조합니다. 임의 목적지 경로 연동에는 전체 경로 좌표를 제공하는 서비스가 필요합니다.
 5. [ITS 공사 정보](https://www.its.go.kr/file/opendata/openapi_manual.pdf)와 [에어코리아 측정소 정보](https://www.data.go.kr/data/15073861/openapi.do)를 조회합니다. 공사 방향·좌표를 정적 시연 경로와 대조하고 인근 측정소의 초미세먼지 관측값을 자동 주행 정책에 전달합니다. 실제 GPS 주행 중 환경 정보를 5분마다 갱신합니다.
 
 ## 공모전 제출 기준
