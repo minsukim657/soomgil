@@ -43,9 +43,11 @@ public final class MainActivity extends Activity {
     private static final String DEMO_ROAD_ID = "demo-road";
     private static final double DEMO_HEADING = 90;
     private static final WorkZoneApproach WORK_ZONE = new WorkZoneApproach(100, 10, 30);
+    private static final double LIVE_WORK_POINT_HALF_LENGTH_METERS = 15;
+    private static final long LIVE_ENVIRONMENT_REFRESH_MS = 5 * 60 * 1000L;
 
-    private static final double DEMO_LATITUDE = 34.69806;
-    private static final double DEMO_LONGITUDE = 126.69637;
+    private static final double DEMO_LATITUDE = 37.5244505;
+    private static final double DEMO_LONGITUDE = 126.8817115;
     private static final String[] API_SAMPLES = {"공사 진행", "공사 종료", "조회 실패"};
 
     private record Scenario(String title, Work work, Air approachAir, Air afterAir) {
@@ -67,9 +69,13 @@ public final class MainActivity extends Activity {
     private boolean gpsTrip;
     private long gpsStartedAt;
     private LocationData previousFix;
+    private WorkZoneApproach.Position gpsPosition;
     private Road gpsRoad = Road.UNKNOWN;
+    private VentilationInputBridge.RouteEvidence gpsRouteEvidence;
     private FusedLocation locationSdk;
     private TextView locationStatus;
+    private EnvironmentReading liveReading;
+    private boolean gpsStartInFlight;
     private final FusedLocationListener locationListener = new FusedLocationListener() {
         @Override
         public void onChanged(LocationData location) {
@@ -130,6 +136,7 @@ public final class MainActivity extends Activity {
     private boolean appControlInFlight;
     private boolean activityResumed;
     private final Runnable pollVehicleState = this::pollActualVehicleState;
+    private final Runnable refreshLiveEnvironment = this::refreshLiveEnvironment;
     private Button next;
     private Button manual;
     private Button demist;
@@ -332,8 +339,8 @@ public final class MainActivity extends Activity {
     private void buildEnvironmentPanel(LinearLayout root) {
         LinearLayout card = panel(root);
         addText(card, "공사·주변 대기 관측", 18, TEXT, true);
-        addText(card, "시연 좌표 · 34.69806, 126.69637", 14, MUTED, false);
-        addButton(card, "서부간선도로 GPS 시연 시작", view -> {
+        addText(card, "실제 조회 기준 · 서부간선도로 신정교~목동교", 14, MUTED, false);
+        addButton(card, "실제 GPS·환경으로 주행 시작", view -> {
             if (checkSelfPermission(LOCATION_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{LOCATION_PERMISSION}, LOCATION_REQUEST);
             } else {
@@ -367,28 +374,69 @@ public final class MainActivity extends Activity {
     }
 
     private void startLocationTest() {
-        if (locationSdk != null) {
-            startTrip(SCENARIOS[scenario.getSelectedItemPosition()], true);
+        if (started && gpsTrip) {
+            locationStatus.setText("실제 GPS 주행이 이미 진행 중이에요.");
             return;
         }
-        FusedLocation sdk = new FusedLocation(this);
-        if (!sdk.isSupported()) {
-            locationStatus.setText("이 기기에서는 Pleos 차량 위치 수신을 사용할 수 없어요.");
+        if (gpsStartInFlight) return;
+        gpsStartInFlight = true;
+        locationStatus.setText("공사·대기 정보를 새로 확인하고 있어요.");
+        apiClient.fetchAround(DEMO_LATITUDE, DEMO_LONGITUDE, new SoomgilApiClient.Callback() {
+            @Override public void onSuccess(EnvironmentReading reading) {
+                gpsStartInFlight = false;
+                liveReading = reading;
+                showLiveEnvironment(reading);
+                startGpsTrip(reading);
+            }
+
+            @Override public void onFailure(String message) {
+                gpsStartInFlight = false;
+                EnvironmentReading failure = EnvironmentReading.failure(message);
+                liveReading = failure;
+                showLiveEnvironment(failure);
+                locationStatus.setText("최신 환경 정보를 받지 못해 GPS 자동 공조를 시작하지 않았어요.");
+            }
+        });
+    }
+
+    private void startGpsTrip(EnvironmentReading reading) {
+        if (reading == null || reading.hasFailed()
+                || !Double.isFinite(reading.workLatitude) || !Double.isFinite(reading.workLongitude)) {
+            locationStatus.setText("경로와 일치하는 공사 정보를 확인할 수 없어 자동화를 시작하지 않았어요.");
+            return;
+        }
+        Observation fresh = liveEnvironment.observe(reading, null, 0, enabled.isChecked(), false, false);
+        if (fresh.work() == Work.UNKNOWN || fresh.air() == Air.UNKNOWN) {
+            locationStatus.setText("공사 상태 또는 최신 대기 정보를 확인할 수 없어 자동화를 시작하지 않았어요.");
+            return;
+        }
+        SeobuDemoRoute.Match event = GPS_DEMO_ROUTE.match(reading.workLatitude, reading.workLongitude);
+        if (event.offsetMeters() > 30 || event.distanceMeters() < GPS_DEMO_ROUTE.startMeters()
+                || event.distanceMeters() > GPS_DEMO_ROUTE.endMeters()) {
+            locationStatus.setText("공사 위치가 GPS 시연 구간과 일치하지 않아 자동화를 시작하지 않았어요.");
             return;
         }
 
-        locationStatus.setText("차량 위치를 기다리고 있어요.");
-        try {
-            sdk.initialize();
-            locationSdk = sdk;
-            sdk.registerFusedLocationCallback(locationListener);
-            startTrip(SCENARIOS[scenario.getSelectedItemPosition()], true);
-            sdk.getLastKnownLocation(locationListener);
-        } catch (RuntimeException error) {
-            stopLocationTest();
-            locationStatus.setText("차량 위치 수신을 시작하지 못했어요.");
-            Log.w("SoomgilLocation", "Could not start vehicle location receiver", error);
+        Scenario liveScenario = new Scenario("실시간 공사·대기 정보", fresh.work(), fresh.air(), fresh.air());
+        if (locationSdk == null) {
+            FusedLocation sdk = new FusedLocation(this);
+            if (!sdk.isSupported()) {
+                locationStatus.setText("이 기기에서는 Pleos 차량 위치 수신을 사용할 수 없어요.");
+                return;
+            }
+            try {
+                sdk.initialize();
+                locationSdk = sdk;
+                sdk.registerFusedLocationCallback(locationListener);
+            } catch (RuntimeException error) {
+                stopLocationTest();
+                locationStatus.setText("차량 위치 수신을 시작하지 못했어요.");
+                Log.w("SoomgilLocation", "Could not start vehicle location receiver", error);
+                return;
+            }
         }
+        locationStatus.setText("실제 차량 위치를 기다리고 있어요.");
+        startTrip(liveScenario, true);
     }
 
     private void stopLocationTest() {
@@ -418,7 +466,40 @@ public final class MainActivity extends Activity {
         });
     }
 
+    private void refreshLiveEnvironment() {
+        if (!activityResumed || !started || !gpsTrip) return;
+        apiClient.fetchAround(DEMO_LATITUDE, DEMO_LONGITUDE, new SoomgilApiClient.Callback() {
+            @Override public void onSuccess(EnvironmentReading reading) {
+                if (isFinishing() || isDestroyed()) return;
+                showLiveEnvironment(reading);
+                record("실시간 공사·대기 정보 갱신");
+                log.setText(String.join("\n", history));
+                demoHandler.postDelayed(refreshLiveEnvironment, LIVE_ENVIRONMENT_REFRESH_MS);
+            }
+
+            @Override public void onFailure(String message) {
+                if (isFinishing() || isDestroyed()) return;
+                EnvironmentReading failure = EnvironmentReading.failure(message);
+                showLiveEnvironment(failure);
+                record("환경 정보 갱신 실패 · 자동화는 안전하게 대기");
+                log.setText(String.join("\n", history));
+                demoHandler.postDelayed(refreshLiveEnvironment, LIVE_ENVIRONMENT_REFRESH_MS);
+            }
+        });
+    }
+
+    private void scheduleLiveEnvironmentRefresh() {
+        demoHandler.removeCallbacks(refreshLiveEnvironment);
+        if (activityResumed && started && gpsTrip) {
+            demoHandler.postDelayed(refreshLiveEnvironment, LIVE_ENVIRONMENT_REFRESH_MS);
+        }
+    }
+
     private void showLiveEnvironment(EnvironmentReading reading) {
+        liveReading = reading;
+        if (started && gpsTrip && gpsPosition != null) {
+            gpsRouteEvidence = routeEvidenceFor(gpsPosition);
+        }
         // Live route matching must provide evidence for the same ITS work zone.
         Observation input = liveEnvironment.observe(reading, null, 0,
                 enabled.isChecked(), false, false);
@@ -431,9 +512,22 @@ public final class MainActivity extends Activity {
         String control = decision.action() == Action.KEEP
                 ? "공조 유지 · 공사 구간과 차량 경로 일치 확인 필요"
                 : "공조 제어 조건 충족 · 시연 판단";
-        environmentResult.setText(reading.toDisplayText()
+        String locationMatch = "";
+        if (Double.isFinite(reading.workLatitude) && Double.isFinite(reading.workLongitude)) {
+            SeobuDemoRoute.Match match = GPS_DEMO_ROUTE.match(reading.workLatitude, reading.workLongitude);
+            boolean nearDemoZone = match.offsetMeters() <= 30
+                    && match.distanceMeters() >= GPS_DEMO_ROUTE.startMeters()
+                    && match.distanceMeters() <= GPS_DEMO_ROUTE.endMeters();
+            locationMatch = nearDemoZone
+                    ? (started && gpsTrip ? "\n공사 지점이 시연 경로와 일치해요. GPS 주행 중이에요." : "\n공사 지점이 시연 경로와 일치해요. GPS 주행을 시작하면 접근·통과 상태를 확인해요.")
+                    : "\n공사 지점이 서부간선도로 시연 구간에서 벗어나 있어요.";
+        }
+        environmentResult.setText(reading.toDisplayText() + locationMatch
                 + "\n판단에 사용한 대기 등급 · " + air
-                + "\n" + control);
+                + "\n" + (started && gpsTrip
+                    ? "실제 GPS 위치에 따라 공조 상태를 판단하고 있어요."
+                    : control));
+        if (started && gpsTrip) update();
     }
 
     private void startSampleTrip(int selected) {
@@ -458,7 +552,9 @@ public final class MainActivity extends Activity {
 
     private void clearGpsPosition() {
         previousFix = null;
+        gpsPosition = null;
         gpsRoad = Road.UNKNOWN;
+        gpsRouteEvidence = null;
         if (started && gpsTrip) update();
     }
 
@@ -472,7 +568,9 @@ public final class MainActivity extends Activity {
         elapsed = (android.os.SystemClock.elapsedRealtime() - gpsStartedAt) / 1000;
         if (previousFix != null && fix.getTimestampMillis() <= previousFix.getTimestampMillis()) return;
         SeobuDemoRoute.Match projection = GPS_DEMO_ROUTE.match(fix.getLatitude(), fix.getLongitude());
-        if (projection.offsetMeters() > 30) {
+        if (projection.offsetMeters() > 30
+                || projection.distanceMeters() < GPS_DEMO_ROUTE.startMeters()
+                || projection.distanceMeters() > GPS_DEMO_ROUTE.endMeters()) {
             clearGpsPosition();
             return;
         }
@@ -489,12 +587,37 @@ public final class MainActivity extends Activity {
 
         WorkZoneApproach.Position position = new WorkZoneApproach.Position(
                 DEMO_ROAD_ID, projection.distanceMeters(), movement[1]);
-        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
-                DEMO_ROAD_ID, GPS_DEMO_ROUTE.startMeters(), GPS_DEMO_ROUTE.endMeters(),
-                projection.headingDegrees(), trip.work());
-        gpsRoad = WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
+        gpsPosition = position;
+        gpsRouteEvidence = routeEvidenceFor(position);
+        Observation live = liveEnvironment.observe(liveReading, gpsRouteEvidence, elapsed,
+                enabled.isChecked(), driverIntervened, defrost);
+        gpsRoad = live.road();
         Log.d("SoomgilLocation", "GPS demo heading=" + movement[1] + " road=" + gpsRoad);
         update();
+    }
+
+    private VentilationInputBridge.RouteEvidence routeEvidenceFor(WorkZoneApproach.Position position) {
+        if (liveReading == null || liveReading.hasFailed()
+                || !Double.isFinite(liveReading.workLatitude)
+                || !Double.isFinite(liveReading.workLongitude)) return null;
+        SeobuDemoRoute.Match event = GPS_DEMO_ROUTE.match(
+                liveReading.workLatitude, liveReading.workLongitude);
+        if (event.offsetMeters() > 30 || event.distanceMeters() < GPS_DEMO_ROUTE.startMeters()
+                || event.distanceMeters() > GPS_DEMO_ROUTE.endMeters()) return null;
+        Work work = switch (liveReading.workStatus) {
+            case IN_PROGRESS -> Work.ACTIVE;
+            case ENDED -> Work.ENDED;
+            case UNKNOWN -> Work.UNKNOWN;
+        };
+        double zoneStart = Math.max(GPS_DEMO_ROUTE.startMeters(),
+                event.distanceMeters() - LIVE_WORK_POINT_HALF_LENGTH_METERS);
+        double zoneEnd = Math.min(GPS_DEMO_ROUTE.endMeters(),
+                event.distanceMeters() + LIVE_WORK_POINT_HALF_LENGTH_METERS);
+        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
+                DEMO_ROAD_ID, zoneStart, zoneEnd, event.headingDegrees(), work);
+        WorkZoneApproach.Snapshot snapshot = new WorkZoneApproach.Snapshot(true, position, zone);
+        return new VentilationInputBridge.RouteEvidence(
+                liveReading.roadName, liveReading.segment, snapshot);
     }
 
     private void startTrip(Scenario selected) {
@@ -503,6 +626,7 @@ public final class MainActivity extends Activity {
 
     private void startTrip(Scenario selected, boolean useGps) {
         demoHandler.removeCallbacks(advanceDemo);
+        if (!useGps && locationSdk != null) stopLocationTest();
         started = false;
         history.clear();
         record("주행 전 실제 차량 공조 상태를 확인하고 있어요.");
@@ -515,6 +639,7 @@ public final class MainActivity extends Activity {
         pleosVehicleManager.getRecirculationState((success, actual, detail) -> runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) return;
             if (!success || actual == null) {
+                if (useGps) stopLocationTest();
                 record("기존 공조 상태 확인 실패 · 안전을 위해 자동 주행 제어를 시작하지 않았어요. " + detail);
                 log.setText(String.join("\n", history));
                 status.setText("차량 공조 상태를 확인할 수 없어 주행 제어를 보류해요.");
@@ -523,7 +648,9 @@ public final class MainActivity extends Activity {
             gpsTrip = useGps;
             gpsStartedAt = android.os.SystemClock.elapsedRealtime();
             previousFix = null;
+            gpsPosition = null;
             gpsRoad = Road.UNKNOWN;
+            gpsRouteEvidence = null;
             trip = selected;
             policy = new VentilationPolicy();
             history.clear();
@@ -537,8 +664,14 @@ public final class MainActivity extends Activity {
             record(actual
                     ? "출발 전 차량 내기순환 ON 확인 · 앱은 이 상태를 기본값으로 존중"
                     : "출발 전 차량 내기순환 OFF 확인 · 앱이 전환한 경우 위험 해소 후 OFF 복원");
-            update();
+            // Refresh the environment card after GPS mode becomes active.
+            if (gpsTrip && liveReading != null) showLiveEnvironment(liveReading);
+            else update();
             if (!gpsTrip) demoHandler.postDelayed(advanceDemo, DEMO_STEP_DELAY_MS);
+            else {
+                scheduleLiveEnvironmentRefresh();
+                if (locationSdk != null) locationSdk.getLastKnownLocation(locationListener);
+            }
         }));
     }
 
@@ -552,14 +685,28 @@ public final class MainActivity extends Activity {
     }
 
     private void update() {
-        WorkZoneApproach.Position position = new WorkZoneApproach.Position(
-                DEMO_ROAD_ID, DEMO_POSITIONS_METERS[stage], DEMO_HEADING);
-        WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
-                DEMO_ROAD_ID, 200, 300, DEMO_HEADING, trip.work());
-        Road road = gpsTrip ? gpsRoad : WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
-        Air air = road == Road.PASSED ? trip.afterAir() : trip.approachAir();
-        Decision decision = policy.update(new Observation(road, trip.work(), air, elapsed,
-                enabled.isChecked(), driverIntervened, defrost), vehicleMode);
+        Road road;
+        Work work;
+        Air air;
+        Observation input;
+        if (gpsTrip) {
+            input = liveEnvironment.observe(liveReading, gpsRouteEvidence, elapsed,
+                    enabled.isChecked(), driverIntervened, defrost);
+            road = input.road();
+            work = input.work();
+            air = input.air();
+        } else {
+            WorkZoneApproach.Position position = new WorkZoneApproach.Position(
+                    DEMO_ROAD_ID, DEMO_POSITIONS_METERS[stage], DEMO_HEADING);
+            WorkZoneApproach.Zone zone = new WorkZoneApproach.Zone(
+                    DEMO_ROAD_ID, 200, 300, DEMO_HEADING, trip.work());
+            road = WORK_ZONE.classify(new WorkZoneApproach.Snapshot(true, position, zone)).road();
+            air = road == Road.PASSED ? trip.afterAir() : trip.approachAir();
+            work = trip.work();
+            input = new Observation(road, work, air, elapsed,
+                    enabled.isChecked(), driverIntervened, defrost);
+        }
+        Decision decision = policy.update(input, vehicleMode);
         switch (decision.action()) {
             case SWITCH, RESTORE -> {
                 if (policy.isPending(decision.requestId())) {
@@ -597,7 +744,7 @@ public final class MainActivity extends Activity {
         }
         recirculating = vehicleMode == Mode.RECIRCULATION;
 
-        renderDashboard(road, trip.work(), air);
+        renderDashboard(road, work, air);
         log.setText(history.isEmpty() ? "아직 변경이 없어요." : String.join("\n", history));
         updateButtons();
     }
@@ -677,12 +824,14 @@ public final class MainActivity extends Activity {
         activityResumed = true;
         demoHandler.removeCallbacks(pollVehicleState);
         demoHandler.post(pollVehicleState);
+        scheduleLiveEnvironmentRefresh();
     }
 
     @Override
     protected void onPause() {
         activityResumed = false;
         demoHandler.removeCallbacks(pollVehicleState);
+        demoHandler.removeCallbacks(refreshLiveEnvironment);
         super.onPause();
     }
 
@@ -690,6 +839,7 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         stopLocationTest();
         demoHandler.removeCallbacks(advanceDemo);
+        demoHandler.removeCallbacks(refreshLiveEnvironment);
         apiClient.shutdown();
         if (pleosVehicleManager != null) pleosVehicleManager.release();
         super.onDestroy();
