@@ -61,11 +61,14 @@ JDK 17 이상에서 `sh scripts/test-ventilation.sh`로 Android SDK 없이 정�
 
 앱의 **공사·주변 대기 관측** 카드에서 **실제 API에서 조회**를 누르면 서부간선도로 시연 경로와 일치하는 ITS 공사 기록과 가까운 에어코리아 측정소의 최신 초미세먼지 등급을 표시합니다. **실제 GPS·환경으로 주행 시작**은 환경 정보를 새로 조회한 뒤 FusedLocation의 현재 위치와 진행 방향을 연결합니다. 활성 공사 접근과 초미세먼지 나쁨 이상을 각각 판단합니다. 두 조건이 해소되면 앱이 변경한 상태를 운전자 설정으로 복원합니다. 실제 GPS 주행 중 조회는 5분마다 갱신됩니다. 샘플 메뉴의 **샘플로 주행 시작**은 별도 가상 시연 경로입니다.
 
-실제 조회를 사용하려면 프로젝트 루트의 로컬 `local.properties`에 아래 두 속성을 지정하세요. 이 파일은 `.gitignore`에서 제외되어 있습니다.
-
-```properties
-ITS_API_KEY=발급받은_ITS_키
-AIRKOREA_API_KEY=발급받은_에어코리아_키
+클론 후 프로젝트 루트에 local.properties가 없다면 [설정 예시](local.properties.example)를 복사합니다. Windows PowerShell에서는 프로젝트 폴더에서 아래 명령을 실행합니다.
+```powershell
+if (-not (Test-Path .\local.properties)) { Copy-Item .\local.properties.example .\local.properties }
 ```
+
+Android Studio가 이미 local.properties를 만들었다면 기존 SDK 경로를 보존하고, 파일에 ITS_API_KEY와 AIRKOREA_API_KEY만 추가하세요. 빌드에서 Android SDK를 찾지 못하면 Android Studio의 SDK Manager에서 설치 경로를 확인하고 local.properties의 sdk.dir 또는 ANDROID_HOME을 설정하세요.
+
+샘플 주행은 두 키를 비워둔 상태로 실행할 수 있습니다. 실제 API 조회에는 발급받은 두 키를 로컬 파일에 입력한 뒤 앱을 다시 빌드합니다. local.properties는 Git 추적 대상에서 제외됩니다.
+
 
 API 키는 소스 저장소에 포함하지 마세요. 현재 빌드는 로컬 키를 `BuildConfig`를 통해 APK에 포함하므로 APK에서도 추출될 수 있습니다. 공개 배포 전에는 서버 중계 또는 제공기관의 키 제한을 적용해야 합니다.

@@ -1,0 +1,6 @@
+# Copy this file to local.properties in the project root.
+# Android Studio usually configures sdk.dir when opening the project.
+# If Gradle cannot locate the Android SDK, set sdk.dir or ANDROID_HOME.
+# Add API keys only for live lookups. Sample drives use no API keys.
+ITS_API_KEY=
+AIRKOREA_API_KEY=
